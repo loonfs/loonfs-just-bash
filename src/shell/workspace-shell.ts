@@ -1,5 +1,6 @@
 import { Bash, BashTransformPipeline, InMemoryFs, MountableFs, defineCommand } from "just-bash";
 import type { LoonFsBackend } from "../backend/backend.js";
+import { HttpLoonFsBackend } from "../backend/http-backend.js";
 import { grepRoutingPlugin } from "../commands/grep-routing.js";
 import { loonfsGrepCommand } from "../commands/loonfs-grep.js";
 import { LoonFsFileSystem } from "../fs/loonfs-filesystem.js";
@@ -28,7 +29,7 @@ export async function createLoonFsWorkspaceShell(
   const access: WorkspaceAccess = options.access ?? "read-only";
   const limits = resolveWorkspaceLimits(options.limits);
   const mountPoint = normalizeVirtualPath(options.mountPoint ?? "/workspace", "mount");
-  const backend = options.backend;
+  const backend = resolveBackend(options);
   const namespace = await backend.getNamespace();
   const capabilities = await backend.getCapabilities();
   const context = new MutationContext({
@@ -100,7 +101,11 @@ export async function createLoonFsWorkspaceShell(
       maxLoopIterations: 10_000,
       maxWorkUnits: 100_000,
     },
-    defenseInDepth: { enabled: "auto" },
+    // The defense-in-depth box hardens JS intrinsics to contain embedded
+    // language runtimes; this shell registers none, and the box also breaks
+    // any filesystem whose operations perform real network I/O. Containment
+    // here is the allowlist, the absent runtimes, and the budgets.
+    defenseInDepth: { enabled: false },
   });
   const routing = new BashTransformPipeline().use(
     grepRoutingPlugin({ routeToServer: serverGrep, mountPoint }),
@@ -214,4 +219,14 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
   async close(): Promise<void> {
     this.closed = true;
   }
+}
+
+function resolveBackend(options: CreateWorkspaceShellOptions): LoonFsBackend {
+  if (options.backend !== undefined) {
+    return options.backend;
+  }
+  if (options.client !== undefined && options.namespaceId !== undefined) {
+    return new HttpLoonFsBackend({ client: options.client, namespaceId: options.namespaceId });
+  }
+  throw new Error("provide a backend, or a client together with a namespaceId");
 }
