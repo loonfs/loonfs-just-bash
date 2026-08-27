@@ -23,6 +23,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
+    "@loonfs/sdk": "file:../loonfs-sdk-typescript",
     "just-bash": "3.4.2"
   },
   "devDependencies": {

@@ -1,3 +1,4 @@
+import type { LoonFSClient } from "@loonfs/sdk";
 import type { LoonFsBackend } from "./backend/backend.js";
 
 export interface LoonFsActor {
@@ -19,7 +20,10 @@ export interface WorkspaceLimits {
 }
 
 export interface CreateWorkspaceShellOptions {
-  backend: LoonFsBackend;
+  /** A prepared backend; or pass `client` and `namespaceId` instead. */
+  backend?: LoonFsBackend;
+  client?: LoonFSClient;
+  namespaceId?: string;
   actor: LoonFsActor;
   access?: WorkspaceAccess;
   namespaceRoot?: string;
