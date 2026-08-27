@@ -1,20 +1,27 @@
 import { Bash, InMemoryFs, MountableFs } from "just-bash";
 import { beforeEach, describe, expect, it } from "vitest";
-import { FakeLoonFsBackend, LoonFsFileSystem } from "../../src/index.js";
+import { FakeLoonFsBackend, LoonFsFileSystem, MutationContext } from "../../src/index.js";
+import type { WorkspaceAccess } from "../../src/index.js";
 
 let bash: Bash;
+let backend: FakeLoonFsBackend;
 
-beforeEach(() => {
-  const backend = new FakeLoonFsBackend({ namespaceId: "ns_test" });
-  backend.seedFile("/contracts/acme.txt", "termination for convenience\nrenewal terms\n");
-  backend.seedFile("/contracts/zenith.txt", "no termination clause here\n");
-  backend.seedFile("/customers.json", '{"customers":[{"name":"Acme"},{"name":"Zenith"}]}\n');
-  const workspace = new LoonFsFileSystem({ backend });
+function makeBash(access: WorkspaceAccess): Bash {
+  const context = new MutationContext({ actor: { kind: "service", id: "agent_test" } });
+  const workspace = new LoonFsFileSystem({ backend, access, context });
   const fs = new MountableFs({
     base: new InMemoryFs(),
     mounts: [{ mountPoint: "/workspace", filesystem: workspace }],
   });
-  bash = new Bash({ fs, cwd: "/workspace" });
+  return new Bash({ fs, cwd: "/workspace" });
+}
+
+beforeEach(() => {
+  backend = new FakeLoonFsBackend({ namespaceId: "ns_test" });
+  backend.seedFile("/contracts/acme.txt", "termination for convenience\nrenewal terms\n");
+  backend.seedFile("/contracts/zenith.txt", "no termination clause here\n");
+  backend.seedFile("/customers.json", '{"customers":[{"name":"Acme"},{"name":"Zenith"}]}\n');
+  bash = makeBash("read-write");
 });
 
 describe("read-only commands over the workspace", () => {
@@ -66,8 +73,36 @@ describe("read-only commands over the workspace", () => {
     expect(missing.stderr).toContain("missing.txt");
     // just-bash surfaces redirection-target write errors as exec rejections;
     // the workspace shell wrapper will translate these into exit codes.
-    await expect(bash.exec("echo x > /workspace/out.txt")).rejects.toThrow(/EROFS/);
+    const readOnly = makeBash("read-only");
+    await expect(readOnly.exec("echo x > /workspace/out.txt")).rejects.toThrow(/EROFS/);
     const scratch = await bash.exec("echo scratch > /tmp/note.txt && cat /tmp/note.txt");
     expect(scratch.stdout).toBe("scratch\n");
+  });
+
+  it("mutates the durable workspace through shell commands", async () => {
+    const build = await bash.exec(
+      [
+        "mkdir -p output/reports",
+        "echo '{\"status\":\"complete\"}' > output/result.json",
+        "echo 'line two' >> output/result.json",
+        "cp customers.json output/customers.json",
+        "cp -r output output-copy",
+        "mv output/result.json output/final.json",
+        "rm output-copy/customers.json",
+      ].join(" && "),
+    );
+    expect(build.stderr).toBe("");
+    expect(build.exitCode).toBe(0);
+    const read = await bash.exec("cat output/final.json");
+    expect(read.stdout).toBe('{"status":"complete"}\nline two\n');
+    // Durability outlives the shell: a fresh adapter over the same backend
+    // sees every mutation.
+    const fresh = makeBash("read-write");
+    expect((await fresh.exec("cat /workspace/output/final.json")).stdout).toBe(
+      '{"status":"complete"}\nline two\n',
+    );
+    expect((await fresh.exec("ls /workspace/output-copy")).stdout).toBe("reports\nresult.json\n");
+    const gone = await fresh.exec("rm -r /workspace/output && ls /workspace/output");
+    expect(gone.exitCode).not.toBe(0);
   });
 });

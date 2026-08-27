@@ -27,3 +27,5 @@ export { FakeLoonFsBackend } from "./backend/fake-backend.js";
 export { LoonFsFileSystem } from "./fs/loonfs-filesystem.js";
 export type { LoonFsFileSystemOptions } from "./fs/loonfs-filesystem.js";
 export type { WorkspaceFsError } from "./fs/errors.js";
+export { MutationContext } from "./fs/mutation-context.js";
+export type { MutationContextOptions, WorkspaceCounters } from "./fs/mutation-context.js";
