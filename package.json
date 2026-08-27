@@ -26,6 +26,7 @@
     "just-bash": "3.4.2"
   },
   "devDependencies": {
+    "@types/node": "^26.4.0",
     "eslint": "^9.34.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.40.0",
