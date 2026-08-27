@@ -30,6 +30,7 @@ export class MutationContext {
   private readonly maxMutations: number;
   private readonly maxRequests: number;
   private counters: WorkspaceCounters = { requests: 0, mutations: 0, bytesRead: 0, bytesWritten: 0 };
+  private currentMessage: string | undefined;
 
   constructor(options: MutationContextOptions) {
     this.actor = options.actor;
@@ -50,7 +51,11 @@ export class MutationContext {
         path,
       );
     }
-    return { commitId: `c_${randomUUID().replaceAll("-", "")}`, actor: this.actor, message: this.message };
+    return {
+      commitId: `c_${randomUUID().replaceAll("-", "")}`,
+      actor: this.actor,
+      message: this.currentMessage ?? this.message,
+    };
   }
 
   countRequest(syscall: string, path: string): void {
@@ -79,5 +84,11 @@ export class MutationContext {
 
   reset(): void {
     this.counters = { requests: 0, mutations: 0, bytesRead: 0, bytesWritten: 0 };
+  }
+
+  /** One shell execution: fresh budgets, and its host-supplied message on every commit. */
+  beginExecution(message?: string): void {
+    this.reset();
+    this.currentMessage = message;
   }
 }
