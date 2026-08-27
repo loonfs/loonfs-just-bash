@@ -32,6 +32,8 @@ export interface WorkspaceExecOptions {
   message?: string;
 }
 
+export type SearchMode = "server_index" | "bounded_local" | "rejected";
+
 export interface WorkspaceExecResult {
   stdout: string;
   stderr: string;
@@ -41,6 +43,7 @@ export interface WorkspaceExecResult {
   mutations?: number;
   bytesRead?: number;
   bytesWritten?: number;
+  searchModes?: SearchMode[];
 }
 
 export interface WorkspaceInfo {

@@ -1,5 +1,7 @@
-import { Bash, InMemoryFs, MountableFs, defineCommand } from "just-bash";
+import { Bash, BashTransformPipeline, InMemoryFs, MountableFs, defineCommand } from "just-bash";
 import type { LoonFsBackend } from "../backend/backend.js";
+import { grepRoutingPlugin } from "../commands/grep-routing.js";
+import { loonfsGrepCommand } from "../commands/loonfs-grep.js";
 import { LoonFsFileSystem } from "../fs/loonfs-filesystem.js";
 import { MutationContext } from "../fs/mutation-context.js";
 import { normalizeVirtualPath } from "../fs/path.js";
@@ -28,7 +30,7 @@ export async function createLoonFsWorkspaceShell(
   const mountPoint = normalizeVirtualPath(options.mountPoint ?? "/workspace", "mount");
   const backend = options.backend;
   const namespace = await backend.getNamespace();
-  await backend.getCapabilities();
+  const capabilities = await backend.getCapabilities();
   const context = new MutationContext({
     actor: options.actor,
     maxMutationsPerExec: limits.maxMutationsPerExec,
@@ -68,11 +70,21 @@ export async function createLoonFsWorkspaceShell(
     ];
     return { stdout: `${lines.join("\n")}\n`, stderr: "", exitCode: 0 };
   });
+  const serverGrep = capabilities.serverGrep && backend.grepNamespace !== undefined;
   const bash = new Bash({
     fs,
     cwd: mountPoint,
     commands: WORKSPACE_COMMAND_ALLOWLIST,
-    customCommands: [workspaceInfo],
+    customCommands: [
+      workspaceInfo,
+      loonfsGrepCommand({
+        backend,
+        serverGrep,
+        mountPoint,
+        namespaceRoot: normalizeVirtualPath(options.namespaceRoot ?? "/", "mount"),
+        context,
+      }),
+    ],
     executionLimitProfile: "hardened",
     executionLimits: {
       maxExecutionTimeMs: 30_000,
@@ -90,7 +102,10 @@ export async function createLoonFsWorkspaceShell(
     },
     defenseInDepth: { enabled: "auto" },
   });
-  return new WorkspaceShell(bash, backend, context, {
+  const routing = new BashTransformPipeline().use(
+    grepRoutingPlugin({ routeToServer: serverGrep, mountPoint }),
+  );
+  return new WorkspaceShell(bash, backend, context, routing, {
     namespaceId: namespace.namespaceId,
     mountPoint,
     access,
@@ -109,6 +124,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
   private readonly bash: Bash;
   private readonly backend: LoonFsBackend;
   private readonly context: MutationContext;
+  private readonly routing: BashTransformPipeline<{ loonfsGrepRouting?: { routed: number; local: number } }>;
   private readonly identity: WorkspaceIdentity;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
@@ -117,11 +133,13 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     bash: Bash,
     backend: LoonFsBackend,
     context: MutationContext,
+    routing: BashTransformPipeline<{ loonfsGrepRouting?: { routed: number; local: number } }>,
     identity: WorkspaceIdentity,
   ) {
     this.bash = bash;
     this.backend = backend;
     this.context = context;
+    this.routing = routing;
     this.identity = identity;
   }
 
@@ -150,7 +168,12 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       // Glob expansion walks live directory listings through the adapter, so
       // matches are always current and an over-limit listing fails the
       // pattern loudly as a literal instead of matching a partial set.
-      const result = await this.bash.exec(script);
+      const transformed = this.routing.transform(script);
+      const localSearches = transformed.metadata.loonfsGrepRouting?.local ?? 0;
+      for (let i = 0; i < localSearches; i += 1) {
+        this.context.recordSearchMode("bounded_local");
+      }
+      const result = await this.bash.exec(transformed.script);
       stdout = result.stdout;
       stderr = result.stderr;
       exitCode = result.exitCode;
@@ -160,6 +183,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     }
     const headSeqAfter = (await this.backend.getNamespace()).headSeq;
     const counters = this.context.snapshot();
+    const searchModes = this.context.searchModes();
     return {
       stdout,
       stderr,
@@ -169,6 +193,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       mutations: counters.mutations,
       bytesRead: counters.bytesRead,
       bytesWritten: counters.bytesWritten,
+      ...(searchModes.length > 0 ? { searchModes } : {}),
     };
   }
 
