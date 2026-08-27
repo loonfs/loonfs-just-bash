@@ -147,10 +147,10 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     let stderr = "";
     let exitCode = 0;
     try {
-      // Globbing stays off until the session path index exists: the
-      // interpreter treats a failed getAllPaths as zero matches, and a
-      // silently incomplete glob is worse than a loud literal-path error.
-      const result = await this.bash.exec(`set -f\n${script}`);
+      // Glob expansion walks live directory listings through the adapter, so
+      // matches are always current and an over-limit listing fails the
+      // pattern loudly as a literal instead of matching a partial set.
+      const result = await this.bash.exec(script);
       stdout = result.stdout;
       stderr = result.stderr;
       exitCode = result.exitCode;

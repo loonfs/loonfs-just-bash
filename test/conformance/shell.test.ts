@@ -82,11 +82,41 @@ describe("LoonFsWorkspaceShell", () => {
     expect(refused.exitCode).toBe(1);
     expect(refused.stderr).toContain("EROFS");
     expect(refused.stderr).toContain("read-only");
-    // Glob expansion is disabled until the session path index lands, so the
-    // pattern stays literal and fails loudly instead of matching nothing.
-    const glob = await readOnly.exec("cat *.json");
-    expect(glob.exitCode).not.toBe(0);
-    expect(glob.stderr).toContain("*.json");
+  });
+
+  it("expands globs against the live workspace", async () => {
+    const backend = seededBackend();
+    const ws = await shell(backend);
+    expect((await ws.exec("cat *.json")).stdout).toBe('{"customers":[{"name":"Acme"}]}\n');
+    expect((await ws.exec("echo *")).stdout).toBe("contracts customers.json\n");
+    expect((await ws.exec("cat contracts/*.txt")).stdout).toBe("termination for convenience\n");
+    expect((await ws.exec("find . -name '*.txt' | wc -l")).stdout.trim()).toBe("1");
+  });
+
+  it("keeps globs current across local and external mutations", async () => {
+    const backend = seededBackend();
+    const ws = await shell(backend);
+    await ws.exec("echo one > note-a.txt && mv note-a.txt note-c.txt");
+    expect((await ws.exec("echo note-*.txt")).stdout).toBe("note-c.txt\n");
+    backend.seedFile("/external.json", "{}");
+    expect((await ws.exec("echo *.json")).stdout).toBe("customers.json external.json\n");
+  });
+
+  it("fails glob expansion loudly when a listing exceeds its bound", async () => {
+    const backend = seededBackend();
+    const ws = await createLoonFsWorkspaceShell({
+      backend,
+      actor,
+      access: "read-write",
+      limits: { maxDirectoryEntries: 1 },
+    });
+    // The over-limit listing keeps the pattern literal, so the command fails
+    // visibly instead of acting on a partial expansion.
+    const overflow = await ws.exec("cat *.json");
+    expect(overflow.exitCode).not.toBe(0);
+    expect(overflow.stderr).toContain("*.json");
+    const explicit = await ws.exec("cat customers.json");
+    expect(explicit.exitCode).toBe(0);
   });
 
   it("serializes executions so shared budgets stay coherent", async () => {

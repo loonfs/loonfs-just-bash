@@ -147,10 +147,15 @@ export class LoonFsFileSystem implements IFileSystem {
     return virtual;
   }
 
+  /**
+   * The pinned interpreter expands globs through live directory listings and
+   * never calls this; if a future version does, refusing beats answering
+   * with a silently incomplete snapshot.
+   */
   getAllPaths(): string[] {
     throw fsError(
       "ENOTSUP",
-      "wildcard expansion needs the session path index, which this build does not provide yet; use an explicit path or bounded find",
+      "this adapter serves glob expansion through live directory listings, not a path snapshot",
       "glob",
       this.namespaceRoot,
     );
