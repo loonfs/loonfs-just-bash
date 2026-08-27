@@ -9,6 +9,13 @@ import type {
 } from "just-bash";
 import { unsafeBytesFromLatin1, type ByteString } from "just-bash";
 import { Buffer } from "node:buffer";
+import type { LoonFsBackend, LoonFsEntry, WriteBehavior } from "../backend/backend.js";
+import { DEFAULT_WORKSPACE_LIMITS } from "../limits.js";
+import type { WorkspaceAccess } from "../types.js";
+import { fsError, isBackendCondition, mapBackendError } from "./errors.js";
+import type { MutationContext } from "./mutation-context.js";
+import { joinVirtualPaths, normalizeVirtualPath, toNamespacePath } from "./path.js";
+import { statFromEntry } from "./stat-mapping.js";
 
 // Not re-exported from the just-bash package root; declared structurally.
 interface DirentEntry {
@@ -23,29 +30,33 @@ interface ReadFileOptions {
 interface WriteFileOptions {
   encoding?: TextEncodingName;
 }
-import type { LoonFsBackend, LoonFsEntry } from "../backend/backend.js";
-import { DEFAULT_WORKSPACE_LIMITS } from "../limits.js";
-import { fsError, isBackendCondition, mapBackendError } from "./errors.js";
-import { joinVirtualPaths, normalizeVirtualPath, toNamespacePath } from "./path.js";
-import { statFromEntry } from "./stat-mapping.js";
 
 export interface LoonFsFileSystemOptions {
   backend: LoonFsBackend;
   namespaceRoot?: string;
+  access?: WorkspaceAccess;
+  context?: MutationContext;
   maxReadBytes?: number;
+  maxWriteBytes?: number;
+  maxAppendSourceBytes?: number;
   maxDirectoryEntries?: number;
   directoryPageSize?: number;
 }
 
 /**
- * The read side of the just-bash filesystem contract over one LoonFS
- * namespace. Mutations land in a later change; until then every write-shaped
- * method reports a read-only filesystem rather than pretending.
+ * just-bash's filesystem contract over one LoonFS namespace. Reads serve the
+ * durable state; mutations carry actor attribution and revision or inode
+ * guards, and a lost guard surfaces as a conflict rather than degrading to
+ * an unguarded write.
  */
 export class LoonFsFileSystem implements IFileSystem {
   private readonly backend: LoonFsBackend;
   private readonly namespaceRoot: string;
+  private readonly access: WorkspaceAccess;
+  private readonly context: MutationContext | undefined;
   private readonly maxReadBytes: number;
+  private readonly maxWriteBytes: number;
+  private readonly maxAppendSourceBytes: number;
   private readonly maxDirectoryEntries: number;
   private readonly directoryPageSize: number;
   private namespaceId: Promise<string> | undefined;
@@ -53,7 +64,15 @@ export class LoonFsFileSystem implements IFileSystem {
   constructor(options: LoonFsFileSystemOptions) {
     this.backend = options.backend;
     this.namespaceRoot = normalizeVirtualPath(options.namespaceRoot ?? "/", "mount");
+    this.access = options.access ?? "read-only";
+    this.context = options.context;
+    if (this.access === "read-write" && this.context === undefined) {
+      throw new Error("a read-write workspace filesystem needs a MutationContext");
+    }
     this.maxReadBytes = options.maxReadBytes ?? DEFAULT_WORKSPACE_LIMITS.maxReadBytes;
+    this.maxWriteBytes = options.maxWriteBytes ?? DEFAULT_WORKSPACE_LIMITS.maxWriteBytes;
+    this.maxAppendSourceBytes =
+      options.maxAppendSourceBytes ?? DEFAULT_WORKSPACE_LIMITS.maxAppendSourceBytes;
     this.maxDirectoryEntries =
       options.maxDirectoryEntries ?? DEFAULT_WORKSPACE_LIMITS.maxDirectoryEntries;
     this.directoryPageSize = Math.max(1, options.directoryPageSize ?? 1000);
@@ -85,24 +104,14 @@ export class LoonFsFileSystem implements IFileSystem {
         path,
       );
     }
-    try {
-      return (await this.backend.readFile(namespacePath)).bytes;
-    } catch (error) {
-      throw mapBackendError(error, "read", path);
-    }
+    const read = await this.request(() => this.backend.readFile(namespacePath), "read", path);
+    this.context?.countRead(read.bytes.byteLength);
+    return read.bytes;
   }
 
   async exists(path: string): Promise<boolean> {
     const namespacePath = this.namespacePath(path, "stat");
-    try {
-      await this.backend.stat(namespacePath);
-      return true;
-    } catch (error) {
-      if (isBackendCondition(error, "not_found")) {
-        return false;
-      }
-      throw mapBackendError(error, "stat", path);
-    }
+    return (await this.optionalEntry(namespacePath, "stat", path)) !== undefined;
   }
 
   async stat(path: string): Promise<FsStat> {
@@ -147,28 +156,124 @@ export class LoonFsFileSystem implements IFileSystem {
     );
   }
 
-  async writeFile(path: string, _content: FileContent, _options?: WriteFileOptions | TextEncodingName): Promise<void> {
-    throw this.readOnly("write", path);
+  async writeFile(
+    path: string,
+    content: FileContent,
+    options?: WriteFileOptions | TextEncodingName,
+  ): Promise<void> {
+    const context = this.writable("write", path);
+    const bytes = encodeContent(content, options);
+    const namespacePath = this.namespacePath(path, "write");
+    const existing = await this.optionalEntry(namespacePath, "write", path);
+    await this.publish(context, namespacePath, bytes, existing, "write", path);
   }
 
-  async appendFile(path: string, _content: FileContent, _options?: WriteFileOptions | TextEncodingName): Promise<void> {
-    throw this.readOnly("append", path);
+  /**
+   * LoonFS stores immutable whole-file revisions, so append is a bounded
+   * read-modify-write guarded by the revision whose bytes were read.
+   */
+  async appendFile(
+    path: string,
+    content: FileContent,
+    options?: WriteFileOptions | TextEncodingName,
+  ): Promise<void> {
+    const context = this.writable("append", path);
+    const suffix = encodeContent(content, options);
+    const namespacePath = this.namespacePath(path, "append");
+    const existing = await this.optionalEntry(namespacePath, "append", path);
+    if (existing === undefined) {
+      await this.publish(context, namespacePath, suffix, undefined, "append", path);
+      return;
+    }
+    if (existing.kind === "directory") {
+      throw fsError("EISDIR", "illegal operation on a directory", "append", path);
+    }
+    const sizeBytes = existing.file?.sizeBytes ?? 0;
+    if (sizeBytes > this.maxAppendSourceBytes) {
+      throw fsError(
+        "EFBIG",
+        `append would rewrite a LoonFS file larger than the configured ${this.maxAppendSourceBytes}-byte limit; use /tmp for scratch append or publish a complete replacement`,
+        "append",
+        path,
+      );
+    }
+    const read = await this.request(() => this.backend.readFile(namespacePath), "append", path);
+    this.context?.countRead(read.bytes.byteLength);
+    const combined = new Uint8Array(read.bytes.byteLength + suffix.byteLength);
+    combined.set(read.bytes, 0);
+    combined.set(suffix, read.bytes.byteLength);
+    await this.publish(context, namespacePath, combined, read.entry, "append", path);
   }
 
-  async mkdir(path: string, _options?: MkdirOptions): Promise<void> {
-    throw this.readOnly("mkdir", path);
+  async mkdir(path: string, options?: MkdirOptions): Promise<void> {
+    const context = this.writable("mkdir", path);
+    const namespacePath = this.namespacePath(path, "mkdir");
+    await this.request(
+      () =>
+        this.backend.createDirectory(namespacePath, {
+          parents: options?.recursive ?? false,
+          commit: context.mintCommit(path),
+        }),
+      "mkdir",
+      path,
+    );
   }
 
-  async rm(path: string, _options?: RmOptions): Promise<void> {
-    throw this.readOnly("rm", path);
+  async rm(path: string, options?: RmOptions): Promise<void> {
+    const context = this.writable("rm", path);
+    const namespacePath = this.namespacePath(path, "rm");
+    const existing = await this.optionalEntry(namespacePath, "rm", path);
+    if (existing === undefined) {
+      if (options?.force) {
+        return;
+      }
+      throw fsError("ENOENT", "no such file or directory", "rm", path);
+    }
+    try {
+      await this.request(
+        () =>
+          this.backend.deletePath(namespacePath, {
+            recursive: options?.recursive ?? false,
+            expectedInodeId: existing.inodeId,
+            commit: context.mintCommit(path),
+          }),
+        "rm",
+        path,
+      );
+    } catch (error) {
+      // Deleted by another writer is the asked-for outcome.
+      if ((error as { code?: string }).code === "ENOENT") {
+        return;
+      }
+      throw error;
+    }
   }
 
-  async cp(src: string, _dest: string, _options?: CpOptions): Promise<void> {
-    throw this.readOnly("cp", src);
+  async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
+    const context = this.writable("cp", src);
+    const sourcePath = this.namespacePath(src, "cp");
+    const source = await this.statEntry(sourcePath, "cp", src);
+    if (source.kind === "file") {
+      await this.copyOne(context, sourcePath, this.namespacePath(dest, "cp"), src, dest);
+      return;
+    }
+    if (!options?.recursive) {
+      throw fsError("EISDIR", "illegal operation on a directory", "cp", src);
+    }
+    await this.copyTree(context, src, dest);
   }
 
-  async mv(src: string, _dest: string): Promise<void> {
-    throw this.readOnly("rename", src);
+  async mv(src: string, dest: string): Promise<void> {
+    const context = this.writable("rename", src);
+    await this.request(
+      () =>
+        this.backend.movePath(this.namespacePath(src, "rename"), this.namespacePath(dest, "rename"), {
+          behavior: "replace",
+          commit: context.mintCommit(src),
+        }),
+      "rename",
+      src,
+    );
   }
 
   async chmod(path: string, _mode: number): Promise<void> {
@@ -193,25 +298,108 @@ export class LoonFsFileSystem implements IFileSystem {
   }
 
   async utimes(path: string, _atime: Date, _mtime: Date): Promise<void> {
-    throw fsError(
-      "ENOTSUP",
-      "LoonFS timestamps are set by commits, not by utimes",
-      "utimes",
-      path,
-    );
+    throw fsError("ENOTSUP", "LoonFS timestamps are set by commits, not by utimes", "utimes", path);
   }
 
-  private readOnly(syscall: string, path: string): Error {
-    return fsError(
-      "EROFS",
-      "this build of the LoonFS workspace adapter is read-only; mutations land in a later change",
+  private async publish(
+    context: MutationContext,
+    namespacePath: string,
+    bytes: Uint8Array,
+    existing: LoonFsEntry | undefined,
+    syscall: string,
+    path: string,
+  ): Promise<void> {
+    if (existing?.kind === "directory") {
+      throw fsError("EISDIR", "illegal operation on a directory", syscall, path);
+    }
+    if (bytes.byteLength > this.maxWriteBytes) {
+      throw fsError(
+        "EFBIG",
+        `write is ${bytes.byteLength} bytes and the configured write limit is ${this.maxWriteBytes}`,
+        syscall,
+        path,
+      );
+    }
+    const revisionNo = existing?.file?.revisionNo;
+    const commit = context.mintCommit(path);
+    await this.request(
+      () =>
+        this.backend.writeFile(
+          namespacePath,
+          bytes,
+          revisionNo === undefined
+            ? { behavior: "no-replace" as WriteBehavior, commit }
+            : { behavior: "replace" as WriteBehavior, expectedRevisionNo: revisionNo, commit },
+        ),
       syscall,
       path,
     );
+    context.countWritten(bytes.byteLength);
+  }
+
+  private async copyOne(
+    context: MutationContext,
+    sourcePath: string,
+    destinationPath: string,
+    src: string,
+    dest: string,
+  ): Promise<void> {
+    await this.request(
+      () =>
+        this.backend.copyFile(sourcePath, destinationPath, {
+          behavior: "replace",
+          commit: context.mintCommit(dest),
+        }),
+      "cp",
+      src,
+    );
+  }
+
+  private async copyTree(context: MutationContext, src: string, dest: string): Promise<void> {
+    await this.request(
+      () =>
+        this.backend.createDirectory(this.namespacePath(dest, "cp"), {
+          parents: true,
+          commit: context.mintCommit(dest),
+        }),
+      "cp",
+      dest,
+    );
+    for (const entry of await this.listAll(src)) {
+      const childSrc = `${src}/${entry.name}`;
+      const childDest = `${dest}/${entry.name}`;
+      if (entry.kind === "directory") {
+        await this.copyTree(context, childSrc, childDest);
+      } else {
+        await this.copyOne(
+          context,
+          this.namespacePath(childSrc, "cp"),
+          this.namespacePath(childDest, "cp"),
+          childSrc,
+          childDest,
+        );
+      }
+    }
+  }
+
+  private writable(syscall: string, path: string): MutationContext {
+    if (this.access !== "read-write" || this.context === undefined) {
+      throw fsError("EROFS", "the workspace was attached read-only", syscall, path);
+    }
+    return this.context;
   }
 
   private namespacePath(path: string, syscall: string): string {
     return toNamespacePath(normalizeVirtualPath(path, syscall), this.namespaceRoot);
+  }
+
+  private async request<T>(call: () => Promise<T>, syscall: string, path: string): Promise<T> {
+    this.context?.countRequest(syscall, path);
+    try {
+      return await call();
+    } catch (error) {
+      throw mapBackendError(error, syscall, path);
+    }
   }
 
   private async statEntry(
@@ -219,9 +407,21 @@ export class LoonFsFileSystem implements IFileSystem {
     syscall: string,
     virtualPath: string,
   ): Promise<LoonFsEntry> {
+    return this.request(() => this.backend.stat(namespacePath), syscall, virtualPath);
+  }
+
+  private async optionalEntry(
+    namespacePath: string,
+    syscall: string,
+    virtualPath: string,
+  ): Promise<LoonFsEntry | undefined> {
+    this.context?.countRequest(syscall, virtualPath);
     try {
       return await this.backend.stat(namespacePath);
     } catch (error) {
+      if (isBackendCondition(error, "not_found")) {
+        return undefined;
+      }
       throw mapBackendError(error, syscall, virtualPath);
     }
   }
@@ -230,30 +430,31 @@ export class LoonFsFileSystem implements IFileSystem {
     const namespacePath = this.namespacePath(path, "scandir");
     const entries: LoonFsEntry[] = [];
     let cursor: string | undefined;
-    try {
-      for (;;) {
-        const page = await this.backend.listDirectoryPage(
-          namespacePath,
-          cursor === undefined
-            ? { limit: this.directoryPageSize }
-            : { limit: this.directoryPageSize, cursor },
+    for (;;) {
+      const page = await this.request(
+        () =>
+          this.backend.listDirectoryPage(
+            namespacePath,
+            cursor === undefined
+              ? { limit: this.directoryPageSize }
+              : { limit: this.directoryPageSize, cursor },
+          ),
+        "scandir",
+        path,
+      );
+      entries.push(...page.entries);
+      if (entries.length > this.maxDirectoryEntries) {
+        throw fsError(
+          "E2BIG",
+          `directory exceeds the configured ${this.maxDirectoryEntries}-entry listing limit; narrow the operation`,
+          "scandir",
+          path,
         );
-        entries.push(...page.entries);
-        if (entries.length > this.maxDirectoryEntries) {
-          throw fsError(
-            "E2BIG",
-            `directory exceeds the configured ${this.maxDirectoryEntries}-entry listing limit; narrow the operation`,
-            "scandir",
-            path,
-          );
-        }
-        if (page.nextCursor === undefined) {
-          return entries;
-        }
-        cursor = page.nextCursor;
       }
-    } catch (error) {
-      throw mapBackendError(error, "scandir", path);
+      if (page.nextCursor === undefined) {
+        return entries;
+      }
+      cursor = page.nextCursor;
     }
   }
 
@@ -261,6 +462,14 @@ export class LoonFsFileSystem implements IFileSystem {
     this.namespaceId ??= this.backend.getNamespace().then((info) => info.namespaceId);
     return this.namespaceId;
   }
+}
+
+function encodeContent(content: FileContent, options?: WriteFileOptions | TextEncodingName): Uint8Array {
+  if (typeof content !== "string") {
+    return content;
+  }
+  const encoding = typeof options === "string" ? options : (options?.encoding ?? "utf8");
+  return Buffer.from(content, normalizeEncoding(encoding));
 }
 
 function normalizeEncoding(encoding: TextEncodingName | null): BufferEncoding {
