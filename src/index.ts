@@ -29,3 +29,5 @@ export type { LoonFsFileSystemOptions } from "./fs/loonfs-filesystem.js";
 export type { WorkspaceFsError } from "./fs/errors.js";
 export { MutationContext } from "./fs/mutation-context.js";
 export type { MutationContextOptions, WorkspaceCounters } from "./fs/mutation-context.js";
+export { createLoonFsWorkspaceShell } from "./shell/workspace-shell.js";
+export { WORKSPACE_COMMAND_ALLOWLIST } from "./shell/command-policy.js";
