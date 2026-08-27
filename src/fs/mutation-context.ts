@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { LoonFsActor } from "../types.js";
+import type { LoonFsActor, SearchMode } from "../types.js";
 import type { MutationCommit } from "../backend/backend.js";
 import { DEFAULT_WORKSPACE_LIMITS } from "../limits.js";
 import { fsError } from "./errors.js";
@@ -31,6 +31,7 @@ export class MutationContext {
   private readonly maxRequests: number;
   private counters: WorkspaceCounters = { requests: 0, mutations: 0, bytesRead: 0, bytesWritten: 0 };
   private currentMessage: string | undefined;
+  private modes: SearchMode[] = [];
 
   constructor(options: MutationContextOptions) {
     this.actor = options.actor;
@@ -90,5 +91,14 @@ export class MutationContext {
   beginExecution(message?: string): void {
     this.reset();
     this.currentMessage = message;
+    this.modes = [];
+  }
+
+  recordSearchMode(mode: SearchMode): void {
+    this.modes.push(mode);
+  }
+
+  searchModes(): SearchMode[] {
+    return [...this.modes];
   }
 }

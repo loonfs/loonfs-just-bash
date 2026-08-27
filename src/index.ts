@@ -31,3 +31,5 @@ export { MutationContext } from "./fs/mutation-context.js";
 export type { MutationContextOptions, WorkspaceCounters } from "./fs/mutation-context.js";
 export { createLoonFsWorkspaceShell } from "./shell/workspace-shell.js";
 export { WORKSPACE_COMMAND_ALLOWLIST } from "./shell/command-policy.js";
+export type { GrepMatchEntry, GrepPage, GrepQuery } from "./backend/backend.js";
+export type { SearchMode } from "./types.js";

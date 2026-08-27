@@ -41,6 +41,29 @@ export interface MutationReceipt {
 
 export type WriteBehavior = "no-replace" | "replace";
 
+export interface GrepQuery {
+  /** Rust regex dialect at the server; patterns must carry literal bytes. */
+  pattern: string;
+  caseInsensitive: boolean;
+  /** Complete absolute namespace path of a directory. */
+  pathPrefix?: string;
+  cursor?: string;
+}
+
+export interface GrepMatchEntry {
+  path: string;
+  lineNo: number;
+  line: string;
+  lineTruncated: boolean;
+}
+
+export interface GrepPage {
+  matches: GrepMatchEntry[];
+  nextCursor?: string;
+  /** False when the unindexed tail was not fully scanned; results may lag. */
+  tailScanned: boolean;
+}
+
 export interface ListDirectoryPage {
   entries: LoonFsEntry[];
   nextCursor?: string;
@@ -122,4 +145,5 @@ export interface LoonFsBackend {
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt>;
+  grepNamespace?(query: GrepQuery): Promise<GrepPage>;
 }

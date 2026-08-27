@@ -1,4 +1,6 @@
 import type {
+  GrepPage,
+  GrepQuery,
   ListDirectoryPage,
   LoonFsBackend,
   LoonFsCapabilities,
@@ -42,6 +44,7 @@ export class FakeLoonFsBackend implements LoonFsBackend {
   private headSeq = 0;
   private inodeCounter = 1;
   private tick = 0;
+  private serverGrep: { pageSize: number; tailScanned: boolean } | undefined;
 
   constructor(options?: { namespaceId?: string }) {
     this.namespaceId = options?.namespaceId ?? "ns_fake";
@@ -89,8 +92,64 @@ export class FakeLoonFsBackend implements LoonFsBackend {
     this.headSeq += 1;
   }
 
+  enableServerGrep(options?: { pageSize?: number; tailScanned?: boolean }): void {
+    this.serverGrep = {
+      pageSize: Math.max(1, options?.pageSize ?? 100),
+      tailScanned: options?.tailScanned ?? true,
+    };
+  }
+
   async getCapabilities(): Promise<LoonFsCapabilities> {
-    return { serverGrep: false, changeFeed: false, attributes: false };
+    return { serverGrep: this.serverGrep !== undefined, changeFeed: false, attributes: false };
+  }
+
+  async grepNamespace(query: GrepQuery): Promise<GrepPage> {
+    const grep = this.serverGrep;
+    if (grep === undefined) {
+      throw new LoonFsBackendError("unsupported", "content search is not enabled");
+    }
+    const root = this.resolve(query.pathPrefix ?? "/");
+    if (root.kind !== "directory") {
+      throw new LoonFsBackendError("not_a_directory", `${query.pathPrefix} is not a directory`);
+    }
+    const regex = new RegExp(query.pattern, query.caseInsensitive ? "i" : "");
+    const matches: GrepPage["matches"] = [];
+    const walk = (directory: FakeDirectory, prefix: string) => {
+      for (const name of [...directory.children.keys()].sort()) {
+        const child = directory.children.get(name)!;
+        const path = prefix === "/" ? `/${name}` : `${prefix}/${name}`;
+        if (child.kind === "directory") {
+          walk(child, path);
+          continue;
+        }
+        const lines = new TextDecoder().decode(child.bytes).split("\n");
+        lines.forEach((line, index) => {
+          if (regex.test(line)) {
+            matches.push({ path, lineNo: index + 1, line, lineTruncated: false });
+          }
+        });
+      }
+    };
+    walk(root, query.pathPrefix ?? "/");
+    let start = 0;
+    if (query.cursor !== undefined) {
+      const [cursorPath, cursorLine] = query.cursor.split("\u0000");
+      start = matches.findIndex(
+        (match) =>
+          match.path > cursorPath! ||
+          (match.path === cursorPath && match.lineNo > Number(cursorLine)),
+      );
+      if (start < 0) {
+        start = matches.length;
+      }
+    }
+    const window = matches.slice(start, start + grep.pageSize);
+    const page: GrepPage = { matches: window, tailScanned: grep.tailScanned };
+    const last = window[window.length - 1];
+    if (last !== undefined && start + grep.pageSize < matches.length) {
+      page.nextCursor = `${last.path}\u0000${last.lineNo}`;
+    }
+    return page;
   }
 
   async getNamespace(): Promise<LoonFsNamespaceInfo> {
