@@ -29,8 +29,14 @@ export async function createLoonFsWorkspaceShell(
   options: CreateWorkspaceShellOptions,
 ): Promise<LoonFsWorkspaceShell> {
   const access: WorkspaceAccess = options.access ?? "read-only";
+  if (access !== "read-only" && access !== "read-write") {
+    throw new Error("access must be either 'read-only' or 'read-write'");
+  }
   const limits = resolveWorkspaceLimits(options.limits);
   const mountPoint = normalizeVirtualPath(options.mountPoint ?? "/workspace", "mount");
+  if (mountPoint === "/") {
+    throw new Error("mountPoint must name a directory below '/', such as '/workspace'");
+  }
   const raw = resolveBackend(options);
   const namespace = await raw.getNamespace();
   const capabilities = await raw.getCapabilities();
@@ -40,7 +46,7 @@ export async function createLoonFsWorkspaceShell(
     maxLoonFsRequestsPerExec: limits.maxLoonFsRequestsPerExec,
   });
   const serverGrepOffered = capabilities.serverGrep && raw.grepNamespace !== undefined;
-  const backend = new SessionBackend(raw, context);
+  const backend = new SessionBackend(raw);
   const workspaceFs = new LoonFsFileSystem({
     backend,
     access,
@@ -51,8 +57,10 @@ export async function createLoonFsWorkspaceShell(
     maxAppendSourceBytes: limits.maxAppendSourceBytes,
     maxDirectoryEntries: limits.maxDirectoryEntries,
   });
+  const scratchFs = new InMemoryFs();
+  await scratchFs.mkdir("/tmp");
   const fs = new MountableFs({
-    base: new InMemoryFs(),
+    base: scratchFs,
     mounts: [{ mountPoint, filesystem: workspaceFs }],
   });
   const workspaceInfo = defineCommand("workspace-info", async () => {
@@ -72,6 +80,11 @@ export async function createLoonFsWorkspaceShell(
       `max_write_bytes: ${limits.maxWriteBytes}`,
       `max_append_source_bytes: ${limits.maxAppendSourceBytes}`,
       `max_directory_entries: ${limits.maxDirectoryEntries}`,
+      `max_indexed_paths: ${limits.maxIndexedPaths}`,
+      `max_mutations_per_exec: ${limits.maxMutationsPerExec}`,
+      `max_loonfs_requests_per_exec: ${limits.maxLoonFsRequestsPerExec}`,
+      `max_execution_time_ms: ${limits.maxExecutionTimeMs}`,
+      `max_output_bytes: ${limits.maxOutputBytes}`,
     ];
     return { stdout: `${lines.join("\n")}\n`, stderr: "", exitCode: 0 };
   });
@@ -92,12 +105,12 @@ export async function createLoonFsWorkspaceShell(
     ],
     executionLimitProfile: "hardened",
     executionLimits: {
-      maxExecutionTimeMs: 30_000,
-      maxOutputSize: 2 * 1024 * 1024,
+      maxExecutionTimeMs: limits.maxExecutionTimeMs,
+      maxOutputSize: limits.maxOutputBytes,
       maxInputBytes: 32 * 1024 * 1024,
       maxLiveBytes: 64 * 1024 * 1024,
       maxFileSystemBytes: 128 * 1024 * 1024,
-      maxTraversalEntries: 50_000,
+      maxTraversalEntries: limits.maxIndexedPaths,
       maxTraversalDepth: 128,
       maxTraversalWork: 100_000,
       maxGlobOperations: 50_000,
@@ -130,7 +143,7 @@ interface WorkspaceIdentity {
   mountPoint: string;
   access: WorkspaceAccess;
   limits: WorkspaceLimits;
-  onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void;
+  onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void | Promise<void>;
 }
 
 class WorkspaceShell implements LoonFsWorkspaceShell {
@@ -173,7 +186,13 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     script: string,
     options?: WorkspaceExecOptions,
   ): Promise<WorkspaceExecResult> {
-    this.context.beginExecution(options?.message);
+    return this.context.runExecution(options?.message, () => this.runExecution(script, options));
+  }
+
+  private async runExecution(
+    script: string,
+    options?: WorkspaceExecOptions,
+  ): Promise<WorkspaceExecResult> {
     const startedAtMs = Date.now();
     const headSeqBefore = await this.observedHeadSeq();
     let stdout = "";
@@ -201,7 +220,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     const searchModes = this.context.searchModes();
     if (this.identity.onExecutionSummary !== undefined) {
       try {
-        this.identity.onExecutionSummary({
+        const observed = this.identity.onExecutionSummary({
           namespaceId: this.identity.namespaceId,
           ...(options?.toolCallId !== undefined ? { toolCallId: options.toolCallId } : {}),
           ...(options?.message !== undefined ? { message: options.message } : {}),
@@ -213,8 +232,11 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
           mutations: counters.mutations,
           bytesRead: counters.bytesRead,
           bytesWritten: counters.bytesWritten,
-          searchModes,
+          searchModes: [...searchModes],
         });
+        if (observed !== undefined) {
+          void Promise.resolve(observed).catch(() => {});
+        }
       } catch {
         // The host's observer must not affect the execution.
       }
@@ -225,6 +247,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       exitCode,
       ...(headSeqBefore !== undefined ? { headSeqBefore } : {}),
       ...(headSeqAfter !== undefined ? { headSeqAfter } : {}),
+      requests: counters.requests,
       mutations: counters.mutations,
       bytesRead: counters.bytesRead,
       bytesWritten: counters.bytesWritten,
@@ -243,8 +266,8 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
 
   /** Clears a fenced-writer latch and proves the deployment is reachable. */
   async refresh(): Promise<void> {
-    this.backend.clearFence();
     await this.backend.getNamespace();
+    this.backend.clearFence();
   }
 
   async info(): Promise<WorkspaceInfo> {
@@ -253,7 +276,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       mountPoint: this.identity.mountPoint,
       access: this.identity.access,
       headSeq: (await this.backend.getNamespace()).headSeq,
-      limits: this.identity.limits,
+      limits: { ...this.identity.limits },
     };
   }
 

@@ -9,6 +9,8 @@ export interface LoonFsActor {
 export type WorkspaceAccess = "read-only" | "read-write";
 
 export interface WorkspaceLimits {
+  maxExecutionTimeMs: number;
+  maxOutputBytes: number;
   maxReadBytes: number;
   maxWriteBytes: number;
   maxAppendSourceBytes: number;
@@ -29,7 +31,7 @@ export interface CreateWorkspaceShellOptions {
   mountPoint?: string;
   limits?: Partial<WorkspaceLimits>;
   /** One structured record per execution; never raw content or the script. */
-  onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void;
+  onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void | Promise<void>;
 }
 
 export interface WorkspaceExecOptions {
@@ -45,6 +47,7 @@ export interface WorkspaceExecResult {
   exitCode: number;
   headSeqBefore?: number;
   headSeqAfter?: number;
+  requests?: number;
   mutations?: number;
   bytesRead?: number;
   bytesWritten?: number;

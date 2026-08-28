@@ -29,10 +29,12 @@ await shell.close();
   as its commit message, and a revision or inode guard observed first. A
   guarded write that loses to another writer fails with a visible conflict;
   nothing ever degrades to an unguarded overwrite.
-- `/tmp` and every other path are ephemeral in-memory scratch space. Copying
-  from `/tmp` to `/workspace` publishes durable state.
+- Every path outside the workspace mount is ephemeral in-memory scratch
+  space. `/tmp` exists at startup; copying from it to the default `/workspace`
+  mount publishes durable state.
 - One `exec` at a time per shell; executions are serialized. Results carry
-  head sequences, mutation and byte counters, and the search modes used.
+  head sequences, request, mutation, and byte counters, and the search modes
+  used.
 - A shell redirect is truncate-then-write, so one `>` costs two revisions.
   Route write-heavy intermediate work through `/tmp`.
 - Glob expansion walks live directory listings: matches are always current,

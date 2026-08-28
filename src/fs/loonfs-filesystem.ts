@@ -105,6 +105,7 @@ export class LoonFsFileSystem implements IFileSystem {
       );
     }
     const read = await this.request(() => this.backend.readFile(namespacePath), "read", path);
+    this.context?.countRead(read.bytes.byteLength);
     if (read.bytes.byteLength > this.maxReadBytes) {
       throw fsError(
         "EFBIG",
@@ -113,7 +114,6 @@ export class LoonFsFileSystem implements IFileSystem {
         path,
       );
     }
-    this.context?.countRead(read.bytes.byteLength);
     return read.bytes;
   }
 
@@ -212,6 +212,22 @@ export class LoonFsFileSystem implements IFileSystem {
     }
     const read = await this.request(() => this.backend.readFile(namespacePath), "append", path);
     this.context?.countRead(read.bytes.byteLength);
+    if (read.bytes.byteLength > this.maxAppendSourceBytes) {
+      throw fsError(
+        "EFBIG",
+        `append read ${read.bytes.byteLength} bytes, exceeding the configured ${this.maxAppendSourceBytes}-byte source limit; retry against the current revision or publish a complete replacement`,
+        "append",
+        path,
+      );
+    }
+    if (suffix.byteLength > this.maxWriteBytes - read.bytes.byteLength) {
+      throw fsError(
+        "EFBIG",
+        `append would write ${read.bytes.byteLength + suffix.byteLength} bytes and the configured write limit is ${this.maxWriteBytes}`,
+        "append",
+        path,
+      );
+    }
     const combined = new Uint8Array(read.bytes.byteLength + suffix.byteLength);
     combined.set(read.bytes, 0);
     combined.set(suffix, read.bytes.byteLength);
@@ -407,6 +423,7 @@ export class LoonFsFileSystem implements IFileSystem {
   }
 
   private async request<T>(call: () => Promise<T>, syscall: string, path: string): Promise<T> {
+    this.context?.countRequest(syscall, path);
     try {
       return await call();
     } catch (error) {
@@ -427,6 +444,7 @@ export class LoonFsFileSystem implements IFileSystem {
     syscall: string,
     virtualPath: string,
   ): Promise<LoonFsEntry | undefined> {
+    this.context?.countRequest(syscall, virtualPath);
     try {
       return await this.backend.stat(namespacePath);
     } catch (error) {
@@ -440,6 +458,7 @@ export class LoonFsFileSystem implements IFileSystem {
   private async listAll(path: string): Promise<LoonFsEntry[]> {
     const namespacePath = this.namespacePath(path, "scandir");
     const entries: LoonFsEntry[] = [];
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
     for (;;) {
       const page = await this.request(
@@ -465,6 +484,15 @@ export class LoonFsFileSystem implements IFileSystem {
       if (page.nextCursor === undefined) {
         return entries;
       }
+      if (page.entries.length === 0 || seenCursors.has(page.nextCursor)) {
+        throw fsError(
+          "EIO",
+          "the LoonFS backend returned a non-advancing directory cursor",
+          "scandir",
+          path,
+        );
+      }
+      seenCursors.add(page.nextCursor);
       cursor = page.nextCursor;
     }
   }

@@ -37,11 +37,11 @@ export class HttpLoonFsBackend implements LoonFsBackend {
 
   async getCapabilities(): Promise<LoonFsCapabilities> {
     const document = await this.mapped(() => this.client.system.getCapabilities());
-    const features = new Set(Object.keys(document.features ?? {}));
+    const features = document.features ?? {};
     return {
-      serverGrep: features.has("query.grep"),
-      changeFeed: features.has("core.changes"),
-      attributes: features.has("core.attributes"),
+      serverGrep: features["query.grep"] === true,
+      changeFeed: features["core.changes"] === true,
+      attributes: features["core.attributes"] === true,
     };
   }
 
@@ -277,6 +277,8 @@ const CODE_CONDITIONS: Record<string, LoonFsBackendError["code"]> = {
   query_unindexable: "unsupported",
   unauthorized: "unauthenticated",
   content_too_large: "content_too_large",
+  writer_fenced: "writer_fenced",
+  commit_id_reuse_conflict: "internal",
   server_busy: "busy",
   shutting_down: "busy",
   commit_queue_full: "busy",
@@ -291,21 +293,28 @@ function mapClientError(error: unknown): LoonFsBackendError {
   }
   if (error instanceof LoonFSError) {
     const body = (error.body ?? {}) as { code?: string; message?: string; request_id?: string };
+    const transportFailure = error.statusCode === undefined && body.code === undefined;
     const condition =
       (body.code !== undefined ? CODE_CONDITIONS[body.code] : undefined) ??
-      conditionForStatus(error.statusCode);
+      (transportFailure ? "busy" : conditionForStatus(error.statusCode));
     const mapped = new LoonFsBackendError(
       condition,
-      body.message ?? `the server answered ${error.statusCode ?? "without a status"}`,
-      body.request_id,
+      body.message ??
+        (transportFailure
+          ? "the server could not be reached; the outcome of the request is unknown"
+          : `the server answered ${error.statusCode ?? "without a status"}`),
+      body.request_id ?? error.requestId,
     );
     mapped.cause = body.code;
     return mapped;
   }
-  return new LoonFsBackendError(
-    "busy",
-    "the server could not be reached; the outcome of the request is unknown",
-  );
+  if (error instanceof TypeError) {
+    return new LoonFsBackendError(
+      "busy",
+      "the server could not be reached; the outcome of the request is unknown",
+    );
+  }
+  return new LoonFsBackendError("internal", "the SDK could not complete the LoonFS request");
 }
 
 function conditionForStatus(status: number | undefined): LoonFsBackendError["code"] {

@@ -29,6 +29,7 @@ describe("LoonFsWorkspaceShell", () => {
     expect(write.exitCode).toBe(0);
     expect(write.stdout).toBe("done\n");
     expect(write.headSeqAfter).toBeGreaterThan(write.headSeqBefore ?? 0);
+    expect(write.requests).toBeGreaterThan(0);
     // A shell redirect is truncate-then-write: two guarded revisions.
     expect(write.mutations).toBe(2);
     expect(write.bytesWritten).toBe(5);
@@ -44,16 +45,22 @@ describe("LoonFsWorkspaceShell", () => {
     const info = await ws.info();
     expect(info.namespaceId).toBe("ns_customer_123");
     expect(info.mountPoint).toBe("/workspace");
+    info.limits.maxReadBytes = 1;
+    expect((await ws.info()).limits.maxReadBytes).not.toBe(1);
     const command = await ws.exec("workspace-info");
     expect(command.exitCode).toBe(0);
     expect(command.stdout).toContain("namespace: ns_customer_123");
     expect(command.stdout).toContain("posix_compatible: false");
     expect(command.stdout).toContain("append: bounded whole-file replacement");
+    expect(command.stdout).toContain("max_loonfs_requests_per_exec: 2000");
+    expect(command.stdout).toContain("max_execution_time_ms: 30000");
+    expect(command.stdout).toContain("max_output_bytes: 2097152");
   });
 
   it("keeps the workspace durable and the scratch space ephemeral", async () => {
     const backend = seededBackend();
     const first = await shell(backend);
+    expect((await first.exec("cd /tmp && pwd")).stdout).toBe("/tmp\n");
     await first.exec("echo durable > kept.txt && echo scratch > /tmp/lost.txt");
     expect((await first.exec("cat /tmp/lost.txt")).stdout).toBe("scratch\n");
     await first.close();
@@ -119,6 +126,30 @@ describe("LoonFsWorkspaceShell", () => {
     expect(explicit.exitCode).toBe(0);
   });
 
+  it("applies the configured indexed-path bound to interpreter traversals", async () => {
+    const backend = seededBackend();
+    const ws = await createLoonFsWorkspaceShell({
+      backend,
+      actor,
+      limits: { maxIndexedPaths: 1 },
+    });
+    const overflow = await ws.exec("find . -type f");
+    expect(overflow.exitCode).not.toBe(0);
+    expect(overflow.stderr).toContain("traversal entry limit exceeded (1)");
+  });
+
+  it("applies the configured interpreter output bound", async () => {
+    const backend = seededBackend();
+    const ws = await createLoonFsWorkspaceShell({
+      backend,
+      actor,
+      limits: { maxOutputBytes: 8 },
+    });
+    const overflow = await ws.exec("printf 123456789");
+    expect(overflow.exitCode).not.toBe(0);
+    expect(overflow.stderr).toContain("limit exceeded (8 bytes)");
+  });
+
   it("serializes executions so shared budgets stay coherent", async () => {
     const backend = seededBackend();
     const ws = await shell(backend);
@@ -138,5 +169,15 @@ describe("LoonFsWorkspaceShell", () => {
     const ws = await shell(backend);
     await ws.close();
     await expect(ws.exec("pwd")).rejects.toThrow(/closed/);
+  });
+
+  it("rejects a root mount with an actionable configuration error", async () => {
+    await expect(
+      createLoonFsWorkspaceShell({
+        backend: seededBackend(),
+        actor,
+        mountPoint: "/",
+      }),
+    ).rejects.toThrow(/mountPoint must name a directory below/);
   });
 });
