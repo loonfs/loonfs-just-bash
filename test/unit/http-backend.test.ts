@@ -33,6 +33,27 @@ async function condition(run: Promise<unknown>): Promise<string> {
 }
 
 describe("HttpLoonFsBackend", () => {
+  it("requires capability flags to be explicitly true", async () => {
+    const backend = backendWith({
+      system: {
+        getCapabilities: async () => ({
+          profiles: [],
+          protocol_version: "v0",
+          features: {
+            "query.grep": false,
+            "core.changes": true,
+            "core.attributes": false,
+          },
+        }),
+      },
+    });
+    await expect(backend.getCapabilities()).resolves.toEqual({
+      serverGrep: false,
+      changeFeed: true,
+      attributes: false,
+    });
+  });
+
   it("retries a lost commit outcome once with the same commit identity", async () => {
     const seen: string[] = [];
     let failed = false;
@@ -80,6 +101,8 @@ describe("HttpLoonFsBackend", () => {
       [401, "unauthorized", "unauthenticated"],
       [503, "shutting_down", "busy"],
       [501, "not_supported", "unsupported"],
+      [409, "writer_fenced", "writer_fenced"],
+      [409, "commit_id_reuse_conflict", "internal"],
     ];
     for (const [statusCode, code, expected] of cases) {
       const backend = backendWith({
@@ -113,5 +136,27 @@ describe("HttpLoonFsBackend", () => {
     const transport = await backend.getNamespace().catch((e: LoonFsBackendError) => e);
     expect((transport as LoonFsBackendError).code).toBe("busy");
     expect((transport as LoonFsBackendError).message).not.toContain("ECONNREFUSED");
+  });
+
+  it("treats SDK transport errors as retryable but helper failures as internal", async () => {
+    const transport = backendWith({
+      namespaces: {
+        getNamespace: async () => {
+          throw new LoonFSError({ message: "fetch failed" });
+        },
+      },
+    });
+    expect(await condition(transport.getNamespace())).toBe("busy");
+
+    const helperFailure = backendWith({
+      namespaces: {
+        getNamespace: async () => {
+          throw new Error("checksum mismatch with secret details");
+        },
+      },
+    });
+    const error = await helperFailure.getNamespace().catch((caught: LoonFsBackendError) => caught);
+    expect(error.code).toBe("internal");
+    expect(error.message).not.toContain("secret details");
   });
 });

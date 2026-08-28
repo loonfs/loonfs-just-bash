@@ -5,6 +5,7 @@ export type {
   WorkspaceAccess,
   WorkspaceExecOptions,
   WorkspaceExecResult,
+  WorkspaceExecutionSummary,
   WorkspaceInfo,
   WorkspaceLimits,
 } from "./types.js";

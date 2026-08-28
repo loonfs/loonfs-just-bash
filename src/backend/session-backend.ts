@@ -1,4 +1,3 @@
-import type { MutationContext } from "../fs/mutation-context.js";
 import type {
   GrepPage,
   GrepQuery,
@@ -14,18 +13,17 @@ import type {
 import { LoonFsBackendError } from "./backend.js";
 
 /**
- * The session's view of a backend: every call except capability and head
- * telemetry counts against the execution's request budget, and a fenced
- * writer latches the session read-only until refresh() clears it.
+ * The session's view of a backend: a fenced writer latches the session
+ * read-only until refresh() clears it. Request accounting stays at the
+ * filesystem and command boundaries so the exported filesystem adapter
+ * enforces the same budgets when it is used without a workspace shell.
  */
 export class SessionBackend implements LoonFsBackend {
   private readonly inner: LoonFsBackend;
-  private readonly context: MutationContext;
   private fenced = false;
 
-  constructor(inner: LoonFsBackend, context: MutationContext) {
+  constructor(inner: LoonFsBackend) {
     this.inner = inner;
-    this.context = context;
   }
 
   clearFence(): void {
@@ -41,18 +39,18 @@ export class SessionBackend implements LoonFsBackend {
   }
 
   async stat(path: string): Promise<LoonFsEntry> {
-    return this.observed("stat", path, () => this.inner.stat(path));
+    return this.observed(() => this.inner.stat(path));
   }
 
   async listDirectoryPage(
     path: string,
     options: { cursor?: string; limit: number },
   ): Promise<ListDirectoryPage> {
-    return this.observed("scandir", path, () => this.inner.listDirectoryPage(path, options));
+    return this.observed(() => this.inner.listDirectoryPage(path, options));
   }
 
   async readFile(path: string): Promise<{ bytes: Uint8Array; entry: LoonFsEntry }> {
-    return this.observed("read", path, () => this.inner.readFile(path));
+    return this.observed(() => this.inner.readFile(path));
   }
 
   async writeFile(
@@ -60,21 +58,21 @@ export class SessionBackend implements LoonFsBackend {
     bytes: Uint8Array,
     options: { behavior: WriteBehavior; expectedRevisionNo?: number; commit: MutationCommit },
   ): Promise<MutationReceipt> {
-    return this.mutating("write", path, () => this.inner.writeFile(path, bytes, options));
+    return this.mutating(() => this.inner.writeFile(path, bytes, options));
   }
 
   async createDirectory(
     path: string,
     options: { parents: boolean; commit: MutationCommit },
   ): Promise<MutationReceipt> {
-    return this.mutating("mkdir", path, () => this.inner.createDirectory(path, options));
+    return this.mutating(() => this.inner.createDirectory(path, options));
   }
 
   async deletePath(
     path: string,
     options: { recursive: boolean; expectedInodeId?: string; commit: MutationCommit },
   ): Promise<MutationReceipt> {
-    return this.mutating("rm", path, () => this.inner.deletePath(path, options));
+    return this.mutating(() => this.inner.deletePath(path, options));
   }
 
   async movePath(
@@ -82,7 +80,7 @@ export class SessionBackend implements LoonFsBackend {
     toPath: string,
     options: { behavior: WriteBehavior; commit: MutationCommit },
   ): Promise<MutationReceipt> {
-    return this.mutating("rename", fromPath, () => this.inner.movePath(fromPath, toPath, options));
+    return this.mutating(() => this.inner.movePath(fromPath, toPath, options));
   }
 
   async copyFile(
@@ -90,18 +88,17 @@ export class SessionBackend implements LoonFsBackend {
     toPath: string,
     options: { behavior: WriteBehavior; commit: MutationCommit },
   ): Promise<MutationReceipt> {
-    return this.mutating("cp", fromPath, () => this.inner.copyFile(fromPath, toPath, options));
+    return this.mutating(() => this.inner.copyFile(fromPath, toPath, options));
   }
 
   async grepNamespace(query: GrepQuery): Promise<GrepPage> {
     if (this.inner.grepNamespace === undefined) {
       throw new LoonFsBackendError("unsupported", "content search is not available");
     }
-    return this.observed("grep", query.pathPrefix ?? "/", () => this.inner.grepNamespace!(query));
+    return this.observed(() => this.inner.grepNamespace!(query));
   }
 
-  private async observed<T>(syscall: string, path: string, call: () => Promise<T>): Promise<T> {
-    this.context.countRequest(syscall, path);
+  private async observed<T>(call: () => Promise<T>): Promise<T> {
     try {
       return await call();
     } catch (error) {
@@ -110,14 +107,14 @@ export class SessionBackend implements LoonFsBackend {
     }
   }
 
-  private async mutating<T>(syscall: string, path: string, call: () => Promise<T>): Promise<T> {
+  private async mutating<T>(call: () => Promise<T>): Promise<T> {
     if (this.fenced) {
       throw new LoonFsBackendError(
         "writer_fenced",
         "the namespace writer was fenced earlier in this session; refresh() clears the latch after operator intervention",
       );
     }
-    return this.observed(syscall, path, call);
+    return this.observed(call);
   }
 
   private latchOnFence(error: unknown): void {
