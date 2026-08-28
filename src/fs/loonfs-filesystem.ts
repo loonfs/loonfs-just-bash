@@ -407,7 +407,6 @@ export class LoonFsFileSystem implements IFileSystem {
   }
 
   private async request<T>(call: () => Promise<T>, syscall: string, path: string): Promise<T> {
-    this.context?.countRequest(syscall, path);
     try {
       return await call();
     } catch (error) {
@@ -428,7 +427,6 @@ export class LoonFsFileSystem implements IFileSystem {
     syscall: string,
     virtualPath: string,
   ): Promise<LoonFsEntry | undefined> {
-    this.context?.countRequest(syscall, virtualPath);
     try {
       return await this.backend.stat(namespacePath);
     } catch (error) {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { FakeLoonFsBackend, LoonFsFileSystem, createLoonFsWorkspaceShell } from "../../src/index.js";
-import type { LoonFsBackend } from "../../src/index.js";
+import {
+  FakeLoonFsBackend,
+  LoonFsBackendError,
+  LoonFsFileSystem,
+  createLoonFsWorkspaceShell,
+} from "../../src/index.js";
+import type { LoonFsBackend, WorkspaceExecutionSummary } from "../../src/index.js";
 
 const actor = { kind: "service", id: "agent_42" } as const;
 
@@ -86,5 +91,63 @@ describe("execution result hardening", () => {
     }) as unknown as LoonFsBackend;
     const fs = new LoonFsFileSystem({ backend: lying, maxReadBytes: 16 });
     await expect(fs.readFile("/small.txt")).rejects.toThrow(/EFBIG.*read returned 64 bytes/);
+  });
+
+  it("emits one structured summary per execution", async () => {
+    const backend = new FakeLoonFsBackend({ namespaceId: "ns_obs" });
+    const summaries: WorkspaceExecutionSummary[] = [];
+    const ws = await createLoonFsWorkspaceShell({
+      backend,
+      actor,
+      access: "read-write",
+      onExecutionSummary: (summary) => summaries.push(summary),
+    });
+    await ws.exec("echo one > a.txt", { toolCallId: "call_9", message: "record a" });
+    expect(summaries).toHaveLength(1);
+    const summary = summaries[0]!;
+    expect(summary.namespaceId).toBe("ns_obs");
+    expect(summary.toolCallId).toBe("call_9");
+    expect(summary.message).toBe("record a");
+    expect(summary.exitCode).toBe(0);
+    expect(summary.requests).toBeGreaterThan(0);
+    expect(summary.mutations).toBe(2);
+    expect(summary.bytesWritten).toBe(4);
+    expect(summary.durationMs).toBeGreaterThanOrEqual(0);
+    expect(summary.headSeqAfter).toBeGreaterThan(summary.headSeqBefore ?? 0);
+  });
+
+  it("latches a fenced writer until refresh clears it", async () => {
+    const backend = new FakeLoonFsBackend();
+    let fenceNext = true;
+    let backendWrites = 0;
+    const fencing = new Proxy(backend, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== "writeFile" || typeof value !== "function") {
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return async (...args: unknown[]) => {
+          backendWrites += 1;
+          if (fenceNext) {
+            fenceNext = false;
+            throw new LoonFsBackendError("writer_fenced", "the writer was fenced");
+          }
+          return (value as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    }) as unknown as LoonFsBackend;
+    const ws = await createLoonFsWorkspaceShell({ backend: fencing, actor, access: "read-write" });
+    const fenced = await ws.exec("echo x > fenced.txt");
+    expect(fenced.exitCode).not.toBe(0);
+    const writesAfterFence = backendWrites;
+    const latched = await ws.exec("echo y > latched.txt && mkdir latched-dir");
+    expect(latched.exitCode).not.toBe(0);
+    expect(latched.stderr).toContain("must not continue writing");
+    expect(backendWrites).toBe(writesAfterFence);
+    expect((await ws.exec("cat /workspace 2>/dev/null; ls")).exitCode).toBe(0);
+    await ws.refresh();
+    const recovered = await ws.exec("echo z > recovered.txt && cat recovered.txt");
+    expect(recovered.exitCode).toBe(0);
+    expect(recovered.stdout).toBe("z\n");
   });
 });
