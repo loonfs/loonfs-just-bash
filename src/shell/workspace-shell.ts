@@ -149,6 +149,10 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
   }
 
   exec(script: string, options?: WorkspaceExecOptions): Promise<WorkspaceExecResult> {
+    // Sampled at enqueue: an execution accepted before close() still runs.
+    if (this.closed) {
+      return Promise.reject(new Error("this workspace shell is closed"));
+    }
     const run = this.queue.then(() => this.runSerialized(script, options));
     this.queue = run.then(
       () => undefined,
@@ -161,11 +165,8 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     script: string,
     options?: WorkspaceExecOptions,
   ): Promise<WorkspaceExecResult> {
-    if (this.closed) {
-      throw new Error("this workspace shell is closed");
-    }
     this.context.beginExecution(options?.message);
-    const headSeqBefore = (await this.backend.getNamespace()).headSeq;
+    const headSeqBefore = await this.observedHeadSeq();
     let stdout = "";
     let stderr = "";
     let exitCode = 0;
@@ -186,20 +187,29 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       stderr = `${error instanceof Error ? error.message : String(error)}\n`;
       exitCode = 1;
     }
-    const headSeqAfter = (await this.backend.getNamespace()).headSeq;
+    const headSeqAfter = await this.observedHeadSeq();
     const counters = this.context.snapshot();
     const searchModes = this.context.searchModes();
     return {
       stdout,
       stderr,
       exitCode,
-      headSeqBefore,
-      headSeqAfter,
+      ...(headSeqBefore !== undefined ? { headSeqBefore } : {}),
+      ...(headSeqAfter !== undefined ? { headSeqAfter } : {}),
       mutations: counters.mutations,
       bytesRead: counters.bytesRead,
       bytesWritten: counters.bytesWritten,
       ...(searchModes.length > 0 ? { searchModes } : {}),
     };
+  }
+
+  /** Telemetry must never turn a completed execution into a rejection. */
+  private async observedHeadSeq(): Promise<number | undefined> {
+    try {
+      return (await this.backend.getNamespace()).headSeq;
+    } catch {
+      return undefined;
+    }
   }
 
   async refresh(): Promise<void> {
@@ -218,6 +228,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
 
   async close(): Promise<void> {
     this.closed = true;
+    await this.queue;
   }
 }
 

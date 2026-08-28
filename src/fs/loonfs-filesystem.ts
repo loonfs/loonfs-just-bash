@@ -105,6 +105,14 @@ export class LoonFsFileSystem implements IFileSystem {
       );
     }
     const read = await this.request(() => this.backend.readFile(namespacePath), "read", path);
+    if (read.bytes.byteLength > this.maxReadBytes) {
+      throw fsError(
+        "EFBIG",
+        `the read returned ${read.bytes.byteLength} bytes and the configured read limit is ${this.maxReadBytes}`,
+        "read",
+        path,
+      );
+    }
     this.context?.countRead(read.bytes.byteLength);
     return read.bytes;
   }
