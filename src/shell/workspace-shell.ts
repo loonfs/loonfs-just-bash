@@ -1,6 +1,7 @@
 import { Bash, BashTransformPipeline, InMemoryFs, MountableFs, defineCommand } from "just-bash";
 import type { LoonFsBackend } from "../backend/backend.js";
 import { HttpLoonFsBackend } from "../backend/http-backend.js";
+import { SessionBackend } from "../backend/session-backend.js";
 import { grepRoutingPlugin } from "../commands/grep-routing.js";
 import { loonfsGrepCommand } from "../commands/loonfs-grep.js";
 import { LoonFsFileSystem } from "../fs/loonfs-filesystem.js";
@@ -13,6 +14,7 @@ import type {
   WorkspaceAccess,
   WorkspaceExecOptions,
   WorkspaceExecResult,
+  WorkspaceExecutionSummary,
   WorkspaceInfo,
   WorkspaceLimits,
 } from "../types.js";
@@ -29,14 +31,16 @@ export async function createLoonFsWorkspaceShell(
   const access: WorkspaceAccess = options.access ?? "read-only";
   const limits = resolveWorkspaceLimits(options.limits);
   const mountPoint = normalizeVirtualPath(options.mountPoint ?? "/workspace", "mount");
-  const backend = resolveBackend(options);
-  const namespace = await backend.getNamespace();
-  const capabilities = await backend.getCapabilities();
+  const raw = resolveBackend(options);
+  const namespace = await raw.getNamespace();
+  const capabilities = await raw.getCapabilities();
   const context = new MutationContext({
     actor: options.actor,
     maxMutationsPerExec: limits.maxMutationsPerExec,
     maxLoonFsRequestsPerExec: limits.maxLoonFsRequestsPerExec,
   });
+  const serverGrepOffered = capabilities.serverGrep && raw.grepNamespace !== undefined;
+  const backend = new SessionBackend(raw, context);
   const workspaceFs = new LoonFsFileSystem({
     backend,
     access,
@@ -71,7 +75,7 @@ export async function createLoonFsWorkspaceShell(
     ];
     return { stdout: `${lines.join("\n")}\n`, stderr: "", exitCode: 0 };
   });
-  const serverGrep = capabilities.serverGrep && backend.grepNamespace !== undefined;
+  const serverGrep = serverGrepOffered;
   const bash = new Bash({
     fs,
     cwd: mountPoint,
@@ -115,6 +119,9 @@ export async function createLoonFsWorkspaceShell(
     mountPoint,
     access,
     limits,
+    ...(options.onExecutionSummary !== undefined
+      ? { onExecutionSummary: options.onExecutionSummary }
+      : {}),
   });
 }
 
@@ -123,11 +130,12 @@ interface WorkspaceIdentity {
   mountPoint: string;
   access: WorkspaceAccess;
   limits: WorkspaceLimits;
+  onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void;
 }
 
 class WorkspaceShell implements LoonFsWorkspaceShell {
   private readonly bash: Bash;
-  private readonly backend: LoonFsBackend;
+  private readonly backend: SessionBackend;
   private readonly context: MutationContext;
   private readonly routing: BashTransformPipeline<{ loonfsGrepRouting?: { routed: number; local: number } }>;
   private readonly identity: WorkspaceIdentity;
@@ -136,7 +144,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
 
   constructor(
     bash: Bash,
-    backend: LoonFsBackend,
+    backend: SessionBackend,
     context: MutationContext,
     routing: BashTransformPipeline<{ loonfsGrepRouting?: { routed: number; local: number } }>,
     identity: WorkspaceIdentity,
@@ -166,6 +174,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     options?: WorkspaceExecOptions,
   ): Promise<WorkspaceExecResult> {
     this.context.beginExecution(options?.message);
+    const startedAtMs = Date.now();
     const headSeqBefore = await this.observedHeadSeq();
     let stdout = "";
     let stderr = "";
@@ -190,6 +199,26 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     const headSeqAfter = await this.observedHeadSeq();
     const counters = this.context.snapshot();
     const searchModes = this.context.searchModes();
+    if (this.identity.onExecutionSummary !== undefined) {
+      try {
+        this.identity.onExecutionSummary({
+          namespaceId: this.identity.namespaceId,
+          ...(options?.toolCallId !== undefined ? { toolCallId: options.toolCallId } : {}),
+          ...(options?.message !== undefined ? { message: options.message } : {}),
+          exitCode,
+          durationMs: Date.now() - startedAtMs,
+          ...(headSeqBefore !== undefined ? { headSeqBefore } : {}),
+          ...(headSeqAfter !== undefined ? { headSeqAfter } : {}),
+          requests: counters.requests,
+          mutations: counters.mutations,
+          bytesRead: counters.bytesRead,
+          bytesWritten: counters.bytesWritten,
+          searchModes,
+        });
+      } catch {
+        // The host's observer must not affect the execution.
+      }
+    }
     return {
       stdout,
       stderr,
@@ -212,7 +241,9 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     }
   }
 
+  /** Clears a fenced-writer latch and proves the deployment is reachable. */
   async refresh(): Promise<void> {
+    this.backend.clearFence();
     await this.backend.getNamespace();
   }
 

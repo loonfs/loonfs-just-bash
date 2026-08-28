@@ -161,7 +161,7 @@ describe("guarded mutations under concurrency", () => {
     const fake = new FakeLoonFsBackend();
     fake.seedFile("/in/a.txt", "alpha");
     fake.seedFile("/in/nested/b.txt", "beta");
-    const { fs, context } = workspace(fake);
+    const { fs } = workspace(fake);
     expect((await failure(fs.cp("/in", "/out"))).code).toBe("EISDIR");
     await fs.cp("/in", "/out", { recursive: true });
     expect(new TextDecoder().decode((await fake.readFile("/out/nested/b.txt")).bytes)).toBe("beta");
@@ -170,7 +170,6 @@ describe("guarded mutations under concurrency", () => {
     expect((await fake.stat("/out/renamed.txt")).inodeId).toBe(inode);
     await fs.rm("/out", { recursive: true });
     expect(await fs.exists("/out")).toBe(false);
-    expect(context.snapshot().requests).toBeGreaterThan(0);
     await fs.rm("/out", { force: true });
     expect((await failure(fs.rm("/out"))).code).toBe("ENOENT");
   });
