@@ -7,7 +7,6 @@ export const DEFAULT_WORKSPACE_LIMITS: WorkspaceLimits = {
   maxDirectoryEntries: 10_000,
   maxIndexedPaths: 50_000,
   maxMutationsPerExec: 1_000,
-  maxConcurrentRequests: 16,
   maxLoonFsRequestsPerExec: 2_000,
 };
 

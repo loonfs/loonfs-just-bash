@@ -15,7 +15,6 @@ export interface WorkspaceLimits {
   maxDirectoryEntries: number;
   maxIndexedPaths: number;
   maxMutationsPerExec: number;
-  maxConcurrentRequests: number;
   maxLoonFsRequestsPerExec: number;
 }
 
@@ -29,6 +28,8 @@ export interface CreateWorkspaceShellOptions {
   namespaceRoot?: string;
   mountPoint?: string;
   limits?: Partial<WorkspaceLimits>;
+  /** One structured record per execution; never raw content or the script. */
+  onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void;
 }
 
 export interface WorkspaceExecOptions {
@@ -48,6 +49,21 @@ export interface WorkspaceExecResult {
   bytesRead?: number;
   bytesWritten?: number;
   searchModes?: SearchMode[];
+}
+
+export interface WorkspaceExecutionSummary {
+  namespaceId: string;
+  toolCallId?: string;
+  message?: string;
+  exitCode: number;
+  durationMs: number;
+  headSeqBefore?: number;
+  headSeqAfter?: number;
+  requests: number;
+  mutations: number;
+  bytesRead: number;
+  bytesWritten: number;
+  searchModes: SearchMode[];
 }
 
 export interface WorkspaceInfo {

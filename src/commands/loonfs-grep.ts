@@ -80,7 +80,6 @@ export function loonfsGrepCommand(deps: LoonFsGrepDeps): ReturnType<typeof defin
     for (const prefix of prefixes) {
       let cursor: string | undefined;
       for (;;) {
-        deps.context.countRequest("grep", prefix);
         const page = await deps.backend.grepNamespace!({
           pattern,
           caseInsensitive,
