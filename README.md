@@ -64,7 +64,9 @@ conflict instead of silently replacing their work.
 - `/tmp` is private scratch space. It disappears with the shell.
 - Pipes, redirects, variables, conditionals, loops, and `cd` work normally.
 - Redirected output becomes one durable revision when the command finishes. A
-  command that fails or hits a limit leaves the target file unchanged.
+  script that exits nonzero keeps every pre-existing file at its previous
+  revision unless a command produced new content for it; discarded truncations
+  are noted on stderr.
 - Every change is a LoonFS revision. Earlier revisions of a file stay
   retrievable through the LoonFS SDK and CLI.
 - One shell runs one `exec()` call at a time.

@@ -241,7 +241,14 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
         stderr += `loonfs: the staged write to '${displayPath}' was discarded because the execution was interrupted\n`;
       }
     } else {
-      for (const failure of await this.identity.workspace.settleHeldWrites()) {
+      const settled = await this.identity.workspace.settleHeldWrites({
+        flushExistingTruncates: exitCode === 0,
+      });
+      for (const path of settled.droppedTruncates) {
+        const displayPath = this.workspacePath(path);
+        stderr += `loonfs: the staged truncation of '${displayPath}' was discarded because the script failed\n`;
+      }
+      for (const failure of settled.failures) {
         const displayPath = this.workspacePath(failure.path);
         stderr += `loonfs: the staged write to '${displayPath}' failed: ${failure.error.message}\n`;
         if (exitCode === 0) {

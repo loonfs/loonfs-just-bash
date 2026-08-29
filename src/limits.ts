@@ -15,6 +15,11 @@ export const DEFAULT_WORKSPACE_LIMITS: Readonly<WorkspaceLimits> = Object.freeze
 });
 
 export function resolveWorkspaceLimits(overrides?: Partial<WorkspaceLimits>): WorkspaceLimits {
+  for (const name of Object.keys(overrides ?? {})) {
+    if (!Object.hasOwn(DEFAULT_WORKSPACE_LIMITS, name)) {
+      throw new RangeError(`limits.${name} is not a workspace limit`);
+    }
+  }
   const resolved = { ...DEFAULT_WORKSPACE_LIMITS, ...overrides };
   for (const [name, value] of Object.entries(resolved)) {
     if (!Number.isSafeInteger(value) || value < 0) {

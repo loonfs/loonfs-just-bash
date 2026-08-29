@@ -185,6 +185,16 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
       (await boundedLoop.exec("seq 1 400 > /workspace/staged-rejection.txt")).exitCode,
     ).toBe(126);
     expect((await seeded.exec("cat staged-rejection.txt")).stdout).toBe("ORIGINAL-CONTENT");
+    const missingInput = await seeded.exec(
+      "cat /workspace/absent.txt > /workspace/staged-rejection.txt",
+    );
+    expect(missingInput.exitCode).not.toBe(0);
+    expect((await seeded.exec("cat staged-rejection.txt")).stdout).toBe("ORIGINAL-CONTENT");
+    const invalidTarget = await seeded.exec(
+      ": > /workspace/missing-parent/x.txt && rm /workspace/staged-rejection.txt",
+    );
+    expect(invalidTarget.exitCode).not.toBe(0);
+    expect((await seeded.exec("test -f staged-rejection.txt")).exitCode).toBe(0);
     expect((await backend.getNamespace()).headSeq).toBe(before);
     const written = await seeded.exec("echo hi > staged-rejection.txt");
     expect(written.mutations).toBe(1);

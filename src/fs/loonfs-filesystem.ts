@@ -150,16 +150,36 @@ export class LoonFsFileSystem implements IFileSystem {
   }
 
   async readdir(path: string): Promise<string[]> {
-    return (await this.listAll(path)).map((entry) => entry.name);
+    const entries = await this.listAll(path);
+    return [
+      ...entries.map((entry) => entry.name),
+      ...this.heldDirectoryNames(
+        this.namespacePath(path, "scandir"),
+        entries.map((entry) => entry.name),
+      ),
+    ];
   }
 
   async readdirWithFileTypes(path: string): Promise<DirentEntry[]> {
-    return (await this.listAll(path)).map((entry) => ({
+    const entries = await this.listAll(path);
+    const listed = entries.map((entry) => ({
       name: entry.name,
       isFile: entry.kind === "file",
       isDirectory: entry.kind === "directory",
       isSymbolicLink: false,
     }));
+    return [
+      ...listed,
+      ...this.heldDirectoryNames(
+        this.namespacePath(path, "scandir"),
+        entries.map((entry) => entry.name),
+      ).map((name) => ({
+        name,
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+      })),
+    ];
   }
 
   resolvePath(base: string, path: string): string {
@@ -168,7 +188,11 @@ export class LoonFsFileSystem implements IFileSystem {
 
   async realpath(path: string): Promise<string> {
     const virtual = normalizeVirtualPath(path, "realpath");
-    await this.statEntry(toNamespacePath(virtual, this.namespaceRoot), "realpath", path);
+    const namespacePath = toNamespacePath(virtual, this.namespaceRoot);
+    if (this.context?.heldWrite(namespacePath) !== undefined) {
+      return virtual;
+    }
+    await this.statEntry(namespacePath, "realpath", path);
     return virtual;
   }
 
@@ -195,11 +219,26 @@ export class LoonFsFileSystem implements IFileSystem {
     const bytes = encodeContent(content, options);
     const normalizedVirtualPath = normalizeVirtualPath(path, "write");
     const namespacePath = toNamespacePath(normalizedVirtualPath, this.namespaceRoot);
-    if (bytes.byteLength === 0 && context.holdEmptyWrite(namespacePath, normalizedVirtualPath)) {
+    const held = context.heldWrite(namespacePath);
+    if (held !== undefined) {
+      if (bytes.byteLength === 0) {
+        return;
+      }
+      context.clearHeldWrite(namespacePath);
+      await this.publish(context, namespacePath, bytes, held.existing, "write", path);
       return;
     }
-    context.clearHeldWrite(namespacePath);
     const existing = await this.optionalEntry(namespacePath, "write", path);
+    if (bytes.byteLength === 0 && context.hasActiveExecution()) {
+      if (existing?.kind === "directory") {
+        throw fsError("EISDIR", "illegal operation on a directory", "write", path);
+      }
+      if (existing === undefined) {
+        await this.assertParentDirectory(namespacePath, "write", path);
+      }
+      context.holdEmptyWrite(namespacePath, { virtualPath: normalizedVirtualPath, existing });
+      return;
+    }
     await this.publish(context, namespacePath, bytes, existing, "write", path);
   }
 
@@ -214,17 +253,18 @@ export class LoonFsFileSystem implements IFileSystem {
   ): Promise<void> {
     const context = this.writable("append", path);
     const suffix = encodeContent(content, options);
-    const namespacePath = this.namespacePath(path, "append");
-    if (context.heldWrite(namespacePath)) {
+    const normalizedVirtualPath = normalizeVirtualPath(path, "append");
+    const namespacePath = toNamespacePath(normalizedVirtualPath, this.namespaceRoot);
+    const held = context.heldWrite(namespacePath);
+    if (held !== undefined) {
       if (suffix.byteLength === 0) {
         return;
       }
       context.clearHeldWrite(namespacePath);
-      const existing = await this.optionalEntry(namespacePath, "append", path);
-      if (existing?.kind === "directory") {
+      if (held.existing?.kind === "directory") {
         throw fsError("EISDIR", "illegal operation on a directory", "append", path);
       }
-      await this.publish(context, namespacePath, suffix, existing, "append", path);
+      await this.publish(context, namespacePath, suffix, held.existing, "append", path);
       return;
     }
     const existing = await this.optionalEntry(namespacePath, "append", path);
@@ -235,7 +275,14 @@ export class LoonFsFileSystem implements IFileSystem {
       if (existing !== undefined) {
         return;
       }
-      if (context.holdEmptyWrite(namespacePath, normalizeVirtualPath(path, "append"))) {
+      await this.assertParentDirectory(namespacePath, "append", path);
+      if (
+        context.hasActiveExecution() &&
+        context.holdEmptyWrite(namespacePath, {
+          virtualPath: normalizedVirtualPath,
+          existing: undefined,
+        })
+      ) {
         return;
       }
       await this.publish(context, namespacePath, suffix, undefined, "append", path);
@@ -284,7 +331,7 @@ export class LoonFsFileSystem implements IFileSystem {
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
     const context = this.writable("mkdir", path);
     const namespacePath = this.namespacePath(path, "mkdir");
-    context.clearHeldWrite(namespacePath);
+    await this.materializeHeldWrite(namespacePath);
     await this.request(
       () =>
         this.backend.createDirectory(namespacePath, {
@@ -299,7 +346,7 @@ export class LoonFsFileSystem implements IFileSystem {
   async rm(path: string, options?: RmOptions): Promise<void> {
     const context = this.writable("rm", path);
     const namespacePath = this.namespacePath(path, "rm");
-    context.clearHeldWrite(namespacePath);
+    await this.materializeHeldWrite(namespacePath);
     const existing = await this.optionalEntry(namespacePath, "rm", path);
     if (existing === undefined) {
       if (options?.force) {
@@ -330,6 +377,7 @@ export class LoonFsFileSystem implements IFileSystem {
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
     const context = this.writable("cp", src);
     const sourcePath = this.namespacePath(src, "cp");
+    await this.materializeHeldWrite(sourcePath);
     const destinationPath = this.namespacePath(dest, "cp");
     context.clearHeldWrite(destinationPath);
     const source = await this.statEntry(sourcePath, "cp", src);
@@ -347,7 +395,7 @@ export class LoonFsFileSystem implements IFileSystem {
     const context = this.writable("rename", src);
     const sourcePath = this.namespacePath(src, "rename");
     const destinationPath = this.namespacePath(dest, "rename");
-    context.clearHeldWrite(sourcePath);
+    await this.materializeHeldWrite(sourcePath);
     context.clearHeldWrite(destinationPath);
     await this.request(
       () =>
@@ -385,12 +433,19 @@ export class LoonFsFileSystem implements IFileSystem {
     throw fsError("ENOTSUP", "LoonFS timestamps are set by commits, not by utimes", "utimes", path);
   }
 
-  async settleHeldWrites(): Promise<Array<{ path: string; error: Error }>> {
+  async settleHeldWrites(options: { flushExistingTruncates: boolean }): Promise<{
+    failures: Array<{ path: string; error: Error }>;
+    droppedTruncates: string[];
+  }> {
     const failures: Array<{ path: string; error: Error }> = [];
-    for (const { namespacePath, virtualPath } of this.context?.takeHeldWrites() ?? []) {
+    const droppedTruncates: string[] = [];
+    for (const { namespacePath, virtualPath, existing } of this.context?.takeHeldWrites() ?? []) {
+      if (existing !== undefined && !options.flushExistingTruncates) {
+        droppedTruncates.push(virtualPath);
+        continue;
+      }
       try {
         const context = this.writable("write", virtualPath);
-        const existing = await this.optionalEntry(namespacePath, "write", virtualPath);
         if (existing?.kind === "directory") {
           throw fsError("EISDIR", "illegal operation on a directory", "write", virtualPath);
         }
@@ -409,11 +464,64 @@ export class LoonFsFileSystem implements IFileSystem {
         });
       }
     }
-    return failures;
+    return { failures, droppedTruncates };
   }
 
   discardHeldWrites(): string[] {
     return (this.context?.takeHeldWrites() ?? []).map(({ virtualPath }) => virtualPath);
+  }
+
+  private heldDirectoryNames(namespacePath: string, existingNames: string[]): string[] {
+    const names = new Set(existingNames);
+    const heldNames: string[] = [];
+    for (const held of this.context?.heldWriteEntries() ?? []) {
+      if (
+        held.existing !== undefined ||
+        parentNamespacePath(held.namespacePath) !== namespacePath
+      ) {
+        continue;
+      }
+      const name = held.namespacePath.slice(held.namespacePath.lastIndexOf("/") + 1);
+      if (!names.has(name)) {
+        names.add(name);
+        heldNames.push(name);
+      }
+    }
+    return heldNames;
+  }
+
+  private async assertParentDirectory(
+    namespacePath: string,
+    syscall: string,
+    path: string,
+  ): Promise<void> {
+    const parentPath = parentNamespacePath(namespacePath);
+    if (parentPath === undefined) {
+      return;
+    }
+    const parent = await this.optionalEntry(parentPath, syscall, path);
+    if (parent === undefined) {
+      throw fsError("ENOENT", "no such file or directory", syscall, path);
+    }
+    if (parent.kind !== "directory") {
+      throw fsError("ENOTDIR", "not a directory", syscall, path);
+    }
+  }
+
+  private async materializeHeldWrite(namespacePath: string): Promise<void> {
+    const held = this.context?.takeHeldWrite(namespacePath);
+    if (held === undefined) {
+      return;
+    }
+    const context = this.writable("write", held.virtualPath);
+    await this.publish(
+      context,
+      namespacePath,
+      new Uint8Array(0),
+      held.existing,
+      "write",
+      held.virtualPath,
+    );
   }
 
   private async publish(
@@ -616,4 +724,11 @@ function normalizeEncoding(encoding: TextEncodingName | null): BufferEncoding {
     return "latin1";
   }
   return encoding;
+}
+
+function parentNamespacePath(namespacePath: string): string | undefined {
+  if (namespacePath === "/") {
+    return undefined;
+  }
+  return namespacePath.slice(0, namespacePath.lastIndexOf("/")) || "/";
 }
