@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { LoonFsActor, SearchMode } from "../types.js";
-import type { MutationCommit } from "../backend/backend.js";
+import type { LoonFsEntry, MutationCommit } from "../backend/backend.js";
 import { DEFAULT_WORKSPACE_LIMITS } from "../limits.js";
 import { fsError } from "./errors.js";
 
@@ -19,8 +19,15 @@ export interface MutationContextOptions {
   maxLoonFsRequestsPerExec?: number;
 }
 
+export interface HeldWrite {
+  virtualPath: string;
+  existing: LoonFsEntry | undefined;
+}
+
 interface ExecutionState {
   counters: WorkspaceCounters;
+  heldWrites: Map<string, HeldWrite>;
+  limitNotes: string[];
   message: string | undefined;
   modes: SearchMode[];
 }
@@ -53,12 +60,14 @@ export class MutationContext {
     const state = this.state();
     state.counters.mutations += 1;
     if (state.counters.mutations > this.maxMutations) {
-      throw fsError(
+      const error = fsError(
         "E2BIG",
         `this execution exceeded its ${this.maxMutations}-mutation budget`,
         "commit",
         path,
       );
+      this.noteLimit(error.message);
+      throw error;
     }
     return {
       commitId: `c_${randomUUID().replaceAll("-", "")}`,
@@ -71,13 +80,81 @@ export class MutationContext {
     const state = this.state();
     state.counters.requests += 1;
     if (state.counters.requests > this.maxRequests) {
-      throw fsError(
+      const error = fsError(
         "E2BIG",
         `this execution exceeded its ${this.maxRequests}-request budget`,
         syscall,
         path,
       );
+      this.noteLimit(error.message);
+      throw error;
     }
+  }
+
+  holdEmptyWrite(namespacePath: string, held: HeldWrite): boolean {
+    const active = this.executions.getStore();
+    if (active === undefined) {
+      return false;
+    }
+    active.heldWrites.set(namespacePath, held);
+    return true;
+  }
+
+  heldWrite(namespacePath: string): HeldWrite | undefined {
+    return this.executions.getStore()?.heldWrites.get(namespacePath);
+  }
+
+  hasActiveExecution(): boolean {
+    return this.executions.getStore() !== undefined;
+  }
+
+  clearHeldWrite(namespacePath: string): void {
+    this.executions.getStore()?.heldWrites.delete(namespacePath);
+  }
+
+  takeHeldWrite(namespacePath: string): ({ namespacePath: string } & HeldWrite) | undefined {
+    const active = this.executions.getStore();
+    if (active === undefined) {
+      return undefined;
+    }
+    const held = active.heldWrites.get(namespacePath);
+    if (held === undefined) {
+      return undefined;
+    }
+    active.heldWrites.delete(namespacePath);
+    return { namespacePath, ...held };
+  }
+
+  takeHeldWrites(): Array<{ namespacePath: string } & HeldWrite> {
+    const active = this.executions.getStore();
+    if (active === undefined) {
+      return [];
+    }
+    const entries = [...active.heldWrites].map(([namespacePath, held]) => ({
+      namespacePath,
+      ...held,
+    }));
+    active.heldWrites.clear();
+    return entries;
+  }
+
+  heldWriteEntries(): Array<{ namespacePath: string } & HeldWrite> {
+    const active = this.executions.getStore();
+    if (active === undefined) {
+      return [];
+    }
+    return [...active.heldWrites].map(([namespacePath, held]) => ({ namespacePath, ...held }));
+  }
+
+  noteLimit(message: string): void {
+    const notes = this.state().limitNotes;
+    if (!notes.includes(message)) {
+      notes.push(message);
+    }
+  }
+
+  limitNotes(): string[] {
+    return [...this.state().limitNotes];
   }
 
   countRead(bytes: number): void {
@@ -96,6 +173,8 @@ export class MutationContext {
     const active = this.executions.getStore();
     if (active !== undefined) {
       active.counters = emptyCounters();
+      active.heldWrites.clear();
+      active.limitNotes = [];
       active.modes = [];
       return;
     }
@@ -130,7 +209,7 @@ export class MutationContext {
 }
 
 function emptyState(message?: string): ExecutionState {
-  return { counters: emptyCounters(), message, modes: [] };
+  return { counters: emptyCounters(), heldWrites: new Map(), limitNotes: [], message, modes: [] };
 }
 
 function emptyCounters(): WorkspaceCounters {

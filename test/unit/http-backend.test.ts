@@ -118,6 +118,32 @@ describe("HttpLoonFsBackend", () => {
     }
   });
 
+  it("maps foreign 404 responses to unsupported", async () => {
+    const missingRoute = backendWith({
+      filesystem: {
+        getPathEntry: async () => {
+          throw new LoonFSError({ message: "not found", statusCode: 404, body: {} });
+        },
+      },
+    });
+    const missingError = await missingRoute.stat("/x").catch((error: LoonFsBackendError) => error);
+    expect(missingError.code).toBe("unsupported");
+    expect(missingError.message).toContain("older than this SDK");
+
+    const unknownCode = backendWith({
+      filesystem: {
+        getPathEntry: async () => {
+          throw new LoonFSError({
+            message: "route not found",
+            statusCode: 404,
+            body: { code: "route_not_found" },
+          });
+        },
+      },
+    });
+    expect(await condition(unknownCode.stat("/x"))).toBe("unsupported");
+  });
+
   it("maps unknown statuses and transport loss without leaking internals", async () => {
     const backend = backendWith({
       filesystem: {
@@ -157,5 +183,19 @@ describe("HttpLoonFsBackend", () => {
     const error = await helperFailure.getNamespace().catch((caught: LoonFsBackendError) => caught);
     expect(error.code).toBe("internal");
     expect(error.message).not.toContain("secret details");
+    expect(error.message).toContain("(Error)");
+
+    const typedHelperFailure = backendWith({
+      namespaces: {
+        getNamespace: async () => {
+          throw new TypeError("boom");
+        },
+      },
+    });
+    const typedError = await typedHelperFailure
+      .getNamespace()
+      .catch((caught: LoonFsBackendError) => caught);
+    expect(typedError.code).toBe("internal");
+    expect(typedError.message).toContain("(TypeError)");
   });
 });

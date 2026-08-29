@@ -21,4 +21,10 @@ describe("workspace limit configuration", () => {
     expect(DEFAULT_WORKSPACE_LIMITS.maxReadBytes).not.toBe(7);
     expect(Object.isFrozen(DEFAULT_WORKSPACE_LIMITS)).toBe(true);
   });
+
+  it("rejects unknown workspace limits", () => {
+    expect(() => resolveWorkspaceLimits({ maxIndexedPaths: 1 } as never)).toThrow(
+      /maxIndexedPaths is not a workspace limit/,
+    );
+  });
 });

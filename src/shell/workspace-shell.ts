@@ -4,6 +4,7 @@ import { HttpLoonFsBackend } from "../backend/http-backend.js";
 import { SessionBackend } from "../backend/session-backend.js";
 import { grepRoutingPlugin } from "../commands/grep-routing.js";
 import { loonfsGrepCommand } from "../commands/loonfs-grep.js";
+import { isBackendCondition } from "../fs/errors.js";
 import { LoonFsFileSystem } from "../fs/loonfs-filesystem.js";
 import { MutationContext } from "../fs/mutation-context.js";
 import { normalizeVirtualPath } from "../fs/path.js";
@@ -40,6 +41,16 @@ export async function createLoonFsWorkspaceShell(
   const raw = resolveBackend(options);
   const namespace = await raw.getNamespace();
   const capabilities = await raw.getCapabilities();
+  try {
+    await raw.stat("/");
+  } catch (error) {
+    if (isBackendCondition(error, "unsupported")) {
+      throw new Error(
+        "the LoonFS server did not answer a current path read; this package needs a server speaking LoonFS API v0.3.x",
+      );
+    }
+    throw error;
+  }
   const context = new MutationContext({
     actor: options.actor,
     maxMutationsPerExec: limits.maxMutationsPerExec,
@@ -80,7 +91,9 @@ export async function createLoonFsWorkspaceShell(
       `max_write_bytes: ${limits.maxWriteBytes}`,
       `max_append_source_bytes: ${limits.maxAppendSourceBytes}`,
       `max_directory_entries: ${limits.maxDirectoryEntries}`,
-      `max_indexed_paths: ${limits.maxIndexedPaths}`,
+      `max_traversal_entries: ${limits.maxTraversalEntries}`,
+      `max_command_count: ${limits.maxCommandCount}`,
+      `max_loop_iterations: ${limits.maxLoopIterations}`,
       `max_mutations_per_exec: ${limits.maxMutationsPerExec}`,
       `max_loonfs_requests_per_exec: ${limits.maxLoonFsRequestsPerExec}`,
       `max_execution_time_ms: ${limits.maxExecutionTimeMs}`,
@@ -110,12 +123,12 @@ export async function createLoonFsWorkspaceShell(
       maxInputBytes: 32 * 1024 * 1024,
       maxLiveBytes: 64 * 1024 * 1024,
       maxFileSystemBytes: 128 * 1024 * 1024,
-      maxTraversalEntries: limits.maxIndexedPaths,
+      maxTraversalEntries: limits.maxTraversalEntries,
       maxTraversalDepth: 128,
       maxTraversalWork: 100_000,
       maxGlobOperations: 50_000,
-      maxCommandCount: 1_000,
-      maxLoopIterations: 10_000,
+      maxCommandCount: limits.maxCommandCount,
+      maxLoopIterations: limits.maxLoopIterations,
       maxWorkUnits: 100_000,
     },
     // The defense-in-depth box hardens JS intrinsics to contain embedded
@@ -132,6 +145,7 @@ export async function createLoonFsWorkspaceShell(
     mountPoint,
     access,
     limits,
+    workspace: workspaceFs,
     ...(options.onExecutionSummary !== undefined
       ? { onExecutionSummary: options.onExecutionSummary }
       : {}),
@@ -143,6 +157,7 @@ interface WorkspaceIdentity {
   mountPoint: string;
   access: WorkspaceAccess;
   limits: WorkspaceLimits;
+  workspace: LoonFsFileSystem;
   onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void | Promise<void>;
 }
 
@@ -198,6 +213,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     let stdout = "";
     let stderr = "";
     let exitCode = 0;
+    let interpreterFailed = false;
     try {
       // Glob expansion walks live directory listings through the adapter, so
       // matches are always current and an over-limit listing fails the
@@ -212,8 +228,36 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       stderr = result.stderr;
       exitCode = result.exitCode;
     } catch (error) {
+      interpreterFailed = true;
       stderr = `${error instanceof Error ? error.message : String(error)}\n`;
       exitCode = 1;
+    }
+    // Interpreter limit aborts resolve as 124, or 126 with bash-prefixed stderr, so staged truncates must be dropped.
+    const aborted =
+      interpreterFailed || exitCode === 124 || (exitCode === 126 && stderr.includes("bash: "));
+    if (aborted) {
+      for (const path of this.identity.workspace.discardHeldWrites()) {
+        const displayPath = this.workspacePath(path);
+        stderr += `loonfs: the staged write to '${displayPath}' was discarded because the execution was interrupted\n`;
+      }
+    } else {
+      const settled = await this.identity.workspace.settleHeldWrites({
+        flushExistingTruncates: exitCode === 0,
+      });
+      for (const path of settled.droppedTruncates) {
+        const displayPath = this.workspacePath(path);
+        stderr += `loonfs: the staged truncation of '${displayPath}' was discarded because the script failed\n`;
+      }
+      for (const failure of settled.failures) {
+        const displayPath = this.workspacePath(failure.path);
+        stderr += `loonfs: the staged write to '${displayPath}' failed: ${failure.error.message}\n`;
+        if (exitCode === 0) {
+          exitCode = 1;
+        }
+      }
+    }
+    for (const note of this.context.limitNotes()) {
+      stderr += `loonfs: ${note}\n`;
     }
     const headSeqAfter = await this.observedHeadSeq();
     const counters = this.context.snapshot();
@@ -262,6 +306,10 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     } catch {
       return undefined;
     }
+  }
+
+  private workspacePath(path: string): string {
+    return path === "/" ? this.identity.mountPoint : `${this.identity.mountPoint}${path}`;
   }
 
   /** Clears a fenced-writer latch and proves the deployment is reachable. */

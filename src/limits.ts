@@ -7,12 +7,19 @@ export const DEFAULT_WORKSPACE_LIMITS: Readonly<WorkspaceLimits> = Object.freeze
   maxWriteBytes: 32 * 1024 * 1024,
   maxAppendSourceBytes: 8 * 1024 * 1024,
   maxDirectoryEntries: 10_000,
-  maxIndexedPaths: 50_000,
+  maxTraversalEntries: 50_000,
+  maxCommandCount: 1_000,
+  maxLoopIterations: 10_000,
   maxMutationsPerExec: 1_000,
   maxLoonFsRequestsPerExec: 2_000,
 });
 
 export function resolveWorkspaceLimits(overrides?: Partial<WorkspaceLimits>): WorkspaceLimits {
+  for (const name of Object.keys(overrides ?? {})) {
+    if (!Object.hasOwn(DEFAULT_WORKSPACE_LIMITS, name)) {
+      throw new RangeError(`limits.${name} is not a workspace limit`);
+    }
+  }
   const resolved = { ...DEFAULT_WORKSPACE_LIMITS, ...overrides };
   for (const [name, value] of Object.entries(resolved)) {
     if (!Number.isSafeInteger(value) || value < 0) {

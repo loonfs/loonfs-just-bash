@@ -34,6 +34,9 @@ export function grepRoutingPlugin(options: {
   return {
     name: "loonfs-grep-routing",
     transform(context) {
+      if (hasGrepFunction(context.ast)) {
+        return { ast: context.ast, metadata: { loonfsGrepRouting: { routed: 0, local: 0 } } };
+      }
       let routed = 0;
       let local = 0;
       walk(context.ast, (command) => {
@@ -49,6 +52,22 @@ export function grepRoutingPlugin(options: {
       return { ast: context.ast, metadata: { loonfsGrepRouting: { routed, local } } };
     },
   };
+}
+
+function hasGrepFunction(node: unknown): boolean {
+  if (Array.isArray(node)) {
+    return node.some(hasGrepFunction);
+  }
+  if (node === null || typeof node !== "object") {
+    return false;
+  }
+  if (
+    (node as { type?: string }).type === "FunctionDef" &&
+    (node as { name?: string }).name === "grep"
+  ) {
+    return true;
+  }
+  return Object.values(node).some(hasGrepFunction);
 }
 
 function rewrite(command: SimpleCommandish, mountPoint: string): boolean {
