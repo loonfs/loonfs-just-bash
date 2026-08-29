@@ -105,6 +105,23 @@ describe("FakeLoonFsBackend", () => {
     expect((await backend.getNamespace()).headSeq).toBe(first.headSeq);
   });
 
+  it("rejects a commit id reused for a different mutation", async () => {
+    const backend = seeded();
+    const bytes = new TextEncoder().encode("first payload");
+    await backend.writeFile("/new.txt", bytes, {
+      behavior: "no-replace",
+      commit: commit(1),
+    });
+    const reused = await code(
+      backend.writeFile("/other.txt", new TextEncoder().encode("other payload"), {
+        behavior: "no-replace",
+        commit: commit(1),
+      }),
+    );
+    expect(reused).toBe("internal");
+    expect(await code(backend.stat("/other.txt"))).toBe("not_found");
+  });
+
   it("guards deletes with emptiness and the observed inode", async () => {
     const backend = seeded();
     expect(

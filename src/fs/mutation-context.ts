@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { LoonFsActor, SearchMode } from "../types.js";
 import type { MutationCommit } from "../backend/backend.js";
@@ -18,6 +19,12 @@ export interface MutationContextOptions {
   maxLoonFsRequestsPerExec?: number;
 }
 
+interface ExecutionState {
+  counters: WorkspaceCounters;
+  message: string | undefined;
+  modes: SearchMode[];
+}
+
 /**
  * Owns mutation provenance and the per-execution budgets just-bash cannot
  * see. One shell execution resets it; every backend call and minted commit
@@ -29,9 +36,9 @@ export class MutationContext {
   readonly message: string;
   private readonly maxMutations: number;
   private readonly maxRequests: number;
-  private counters: WorkspaceCounters = { requests: 0, mutations: 0, bytesRead: 0, bytesWritten: 0 };
-  private currentMessage: string | undefined;
-  private modes: SearchMode[] = [];
+  private readonly executions = new AsyncLocalStorage<ExecutionState>();
+  private fallbackState = emptyState();
+  private lastState = this.fallbackState;
 
   constructor(options: MutationContextOptions) {
     this.actor = options.actor;
@@ -43,8 +50,9 @@ export class MutationContext {
 
   /** Mints the commit identity one semantic mutation keeps across retries. */
   mintCommit(path: string): MutationCommit {
-    this.counters.mutations += 1;
-    if (this.counters.mutations > this.maxMutations) {
+    const state = this.state();
+    state.counters.mutations += 1;
+    if (state.counters.mutations > this.maxMutations) {
       throw fsError(
         "E2BIG",
         `this execution exceeded its ${this.maxMutations}-mutation budget`,
@@ -55,13 +63,14 @@ export class MutationContext {
     return {
       commitId: `c_${randomUUID().replaceAll("-", "")}`,
       actor: this.actor,
-      message: this.currentMessage ?? this.message,
+      message: state.message ?? this.message,
     };
   }
 
   countRequest(syscall: string, path: string): void {
-    this.counters.requests += 1;
-    if (this.counters.requests > this.maxRequests) {
+    const state = this.state();
+    state.counters.requests += 1;
+    if (state.counters.requests > this.maxRequests) {
       throw fsError(
         "E2BIG",
         `this execution exceeded its ${this.maxRequests}-request budget`,
@@ -72,33 +81,58 @@ export class MutationContext {
   }
 
   countRead(bytes: number): void {
-    this.counters.bytesRead += bytes;
+    this.state().counters.bytesRead += bytes;
   }
 
   countWritten(bytes: number): void {
-    this.counters.bytesWritten += bytes;
+    this.state().counters.bytesWritten += bytes;
   }
 
   snapshot(): WorkspaceCounters {
-    return { ...this.counters };
+    return { ...this.state().counters };
   }
 
   reset(): void {
-    this.counters = { requests: 0, mutations: 0, bytesRead: 0, bytesWritten: 0 };
+    const active = this.executions.getStore();
+    if (active !== undefined) {
+      active.counters = emptyCounters();
+      active.modes = [];
+      return;
+    }
+    this.fallbackState = emptyState();
+    this.lastState = this.fallbackState;
   }
 
-  /** One shell execution: fresh budgets, and its host-supplied message on every commit. */
+  /** Starts a direct-adapter execution outside runExecution(). */
   beginExecution(message?: string): void {
-    this.reset();
-    this.currentMessage = message;
-    this.modes = [];
+    this.fallbackState = emptyState(message);
+    this.lastState = this.fallbackState;
+  }
+
+  /** Isolates counters, search modes, and attribution across late async completions. */
+  runExecution<T>(message: string | undefined, run: () => Promise<T>): Promise<T> {
+    const state = emptyState(message);
+    this.lastState = state;
+    return this.executions.run(state, run);
   }
 
   recordSearchMode(mode: SearchMode): void {
-    this.modes.push(mode);
+    this.state().modes.push(mode);
   }
 
   searchModes(): SearchMode[] {
-    return [...this.modes];
+    return [...this.state().modes];
   }
+
+  private state(): ExecutionState {
+    return this.executions.getStore() ?? this.lastState;
+  }
+}
+
+function emptyState(message?: string): ExecutionState {
+  return { counters: emptyCounters(), message, modes: [] };
+}
+
+function emptyCounters(): WorkspaceCounters {
+  return { requests: 0, mutations: 0, bytesRead: 0, bytesWritten: 0 };
 }

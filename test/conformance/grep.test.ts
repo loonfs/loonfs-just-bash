@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { FakeLoonFsBackend, createLoonFsWorkspaceShell } from "../../src/index.js";
-import type { LoonFsWorkspaceShell } from "../../src/index.js";
+import {
+  FakeLoonFsBackend,
+  LoonFsBackendError,
+  createLoonFsWorkspaceShell,
+} from "../../src/index.js";
+import type { LoonFsBackend, LoonFsWorkspaceShell } from "../../src/index.js";
 
 const actor = { kind: "service", id: "agent_42" } as const;
 
@@ -109,5 +113,56 @@ describe("server-indexed recursive search", () => {
     const lagged = await ws.exec("loonfs-grep termination contracts");
     expect(lagged.exitCode).toBe(0);
     expect(lagged.stderr).toContain("lags the newest writes");
+  });
+
+  it("surfaces server-truncated matching lines", async () => {
+    const backend = seeded();
+    backend.enableServerGrep();
+    const truncated = new Proxy(backend, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== "grepNamespace" || typeof value !== "function") {
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return async (...args: unknown[]) => {
+          const page = await (value as (...a: unknown[]) => ReturnType<typeof backend.grepNamespace>).apply(
+            target,
+            args,
+          );
+          return {
+            ...page,
+            matches: page.matches.map((match, index) => ({
+              ...match,
+              lineTruncated: index === 0,
+            })),
+          };
+        };
+      },
+    }) as unknown as FakeLoonFsBackend;
+    const ws = await shell(truncated);
+    const result = await ws.exec("loonfs-grep termination contracts");
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain("matching lines were truncated by the server");
+  });
+
+  it("maps a server search refusal and records the rejection", async () => {
+    const backend = seeded();
+    backend.enableServerGrep();
+    const refusing = new Proxy(backend, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property === "grepNamespace") {
+          return async () => {
+            throw new LoonFsBackendError("unsupported", "index unavailable");
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as unknown as LoonFsBackend;
+    const ws = await createLoonFsWorkspaceShell({ backend: refusing, actor });
+    const result = await ws.exec("loonfs-grep termination contracts");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("ENOTSUP");
+    expect(result.searchModes).toEqual(["rejected"]);
   });
 });

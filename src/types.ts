@@ -1,4 +1,4 @@
-import type { LoonFSClient } from "@loonfs/sdk";
+import type { LoonFSClient } from "@loonfs/sdk/server";
 import type { LoonFsBackend } from "./backend/backend.js";
 
 export interface LoonFsActor {
@@ -9,13 +9,14 @@ export interface LoonFsActor {
 export type WorkspaceAccess = "read-only" | "read-write";
 
 export interface WorkspaceLimits {
+  maxExecutionTimeMs: number;
+  maxOutputBytes: number;
   maxReadBytes: number;
   maxWriteBytes: number;
   maxAppendSourceBytes: number;
   maxDirectoryEntries: number;
   maxIndexedPaths: number;
   maxMutationsPerExec: number;
-  maxConcurrentRequests: number;
   maxLoonFsRequestsPerExec: number;
 }
 
@@ -29,6 +30,8 @@ export interface CreateWorkspaceShellOptions {
   namespaceRoot?: string;
   mountPoint?: string;
   limits?: Partial<WorkspaceLimits>;
+  /** One structured record per execution; never raw content or the script. */
+  onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void | Promise<void>;
 }
 
 export interface WorkspaceExecOptions {
@@ -44,10 +47,26 @@ export interface WorkspaceExecResult {
   exitCode: number;
   headSeqBefore?: number;
   headSeqAfter?: number;
+  requests?: number;
   mutations?: number;
   bytesRead?: number;
   bytesWritten?: number;
   searchModes?: SearchMode[];
+}
+
+export interface WorkspaceExecutionSummary {
+  namespaceId: string;
+  toolCallId?: string;
+  message?: string;
+  exitCode: number;
+  durationMs: number;
+  headSeqBefore?: number;
+  headSeqAfter?: number;
+  requests: number;
+  mutations: number;
+  bytesRead: number;
+  bytesWritten: number;
+  searchModes: SearchMode[];
 }
 
 export interface WorkspaceInfo {

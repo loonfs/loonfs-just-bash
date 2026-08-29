@@ -3,8 +3,12 @@
 A sandboxed workspace shell for operating on a durable, revisioned LoonFS
 namespace. It uses familiar shell syntax but is not a POSIX filesystem.
 
+```sh
+npm install @loonfs/just-bash
+```
+
 ```ts
-import { LoonFSClient } from "@loonfs/sdk";
+import { LoonFSClient } from "@loonfs/sdk/server";
 import { createLoonFsWorkspaceShell } from "@loonfs/just-bash";
 
 const shell = await createLoonFsWorkspaceShell({
@@ -29,10 +33,12 @@ await shell.close();
   as its commit message, and a revision or inode guard observed first. A
   guarded write that loses to another writer fails with a visible conflict;
   nothing ever degrades to an unguarded overwrite.
-- `/tmp` and every other path are ephemeral in-memory scratch space. Copying
-  from `/tmp` to `/workspace` publishes durable state.
+- Every path outside the workspace mount is ephemeral in-memory scratch
+  space. `/tmp` exists at startup; copying from it to the default `/workspace`
+  mount publishes durable state.
 - One `exec` at a time per shell; executions are serialized. Results carry
-  head sequences, mutation and byte counters, and the search modes used.
+  head sequences, request, mutation, and byte counters, and the search modes
+  used.
 - A shell redirect is truncate-then-write, so one `>` costs two revisions.
   Route write-heavy intermediate work through `/tmp`.
 - Glob expansion walks live directory listings: matches are always current,
@@ -75,13 +81,10 @@ through `limits` at creation.
 
 ## Development
 
-`@loonfs/sdk` is not published yet; the dependency is a sibling clone, the
-same arrangement the other LoonFS applications use:
-
-```
-git clone git@github.com:loonfs/loonfs-sdk-typescript ../loonfs-sdk-typescript
-(cd ../loonfs-sdk-typescript && npm install && npm run build)
+```sh
 npm install
+npm run lint
+npm run typecheck
 npm test
 ```
 
@@ -90,3 +93,7 @@ at `../loonfs/target/debug/loonfs-server` (override with
 `LOONFS_SERVER_BIN`); it starts a private server on a local-fs store, runs
 the battery, and asserts guard conflicts against a second writer. A small
 runnable example lives at `examples/design-partner.mjs`.
+
+## License
+
+Apache-2.0.

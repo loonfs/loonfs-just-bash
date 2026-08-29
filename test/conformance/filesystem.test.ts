@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { FakeLoonFsBackend, LoonFsFileSystem } from "../../src/index.js";
-import type { WorkspaceFsError } from "../../src/index.js";
+import { FakeLoonFsBackend, LoonFsFileSystem, MutationContext } from "../../src/index.js";
+import type { LoonFsBackend, WorkspaceFsError } from "../../src/index.js";
 
 function seeded(options?: {
   maxReadBytes?: number;
@@ -67,6 +67,23 @@ describe("LoonFsFileSystem read side", () => {
     expect((await failure(bounded.readdir("/contracts"))).code).toBe("E2BIG");
   });
 
+  it("rejects a backend cursor that cannot advance", async () => {
+    const backend = new FakeLoonFsBackend();
+    const stalled = new Proxy(backend, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property === "listDirectoryPage") {
+          return async () => ({ entries: [], nextCursor: "stalled", headSeq: 0 });
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) as unknown as LoonFsBackend;
+    const fs = new LoonFsFileSystem({ backend: stalled });
+    const error = await failure(fs.readdir("/"));
+    expect(error.code).toBe("EIO");
+    expect(error.message).toContain("non-advancing directory cursor");
+  });
+
   it("reads text, bytes, and buffers faithfully", async () => {
     const fs = seeded();
     expect(await fs.readFile("/data/unicode-é.txt")).toBe("café");
@@ -84,6 +101,20 @@ describe("LoonFsFileSystem read side", () => {
     const oversized = await failure(fs.readFile("/contracts/acme.txt"));
     expect(oversized.code).toBe("EFBIG");
     expect(oversized.message).toContain("read limit");
+  });
+
+  it("enforces request budgets when the exported adapter is used directly", async () => {
+    const backend = new FakeLoonFsBackend();
+    backend.seedFile("/one.txt", "one");
+    const context = new MutationContext({
+      actor: { kind: "service", id: "agent_test" },
+      maxLoonFsRequestsPerExec: 1,
+    });
+    context.beginExecution();
+    const fs = new LoonFsFileSystem({ backend, context });
+    await expect(fs.stat("/one.txt")).resolves.toBeDefined();
+    await expect(fs.stat("/one.txt")).rejects.toThrow(/1-request budget/);
+    expect(context.snapshot().requests).toBe(2);
   });
 
   it("resolves and verifies realpath without link traversal", async () => {

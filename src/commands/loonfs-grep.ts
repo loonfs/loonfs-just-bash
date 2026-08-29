@@ -1,5 +1,6 @@
 import { defineCommand } from "just-bash";
-import type { LoonFsBackend } from "../backend/backend.js";
+import type { GrepPage, LoonFsBackend } from "../backend/backend.js";
+import { mapBackendError } from "../fs/errors.js";
 import type { MutationContext } from "../fs/mutation-context.js";
 import { normalizeVirtualPath, toNamespacePath } from "../fs/path.js";
 
@@ -77,20 +78,30 @@ export function loonfsGrepCommand(deps: LoonFsGrepDeps): ReturnType<typeof defin
     const lines: string[] = [];
     let truncated = false;
     let tailLagged = false;
+    let lineTruncated = false;
     for (const prefix of prefixes) {
       let cursor: string | undefined;
       for (;;) {
         deps.context.countRequest("grep", prefix);
-        const page = await deps.backend.grepNamespace!({
-          pattern,
-          caseInsensitive,
-          pathPrefix: prefix,
-          ...(cursor !== undefined ? { cursor } : {}),
-        });
+        let page: GrepPage;
+        try {
+          page = await deps.backend.grepNamespace!({
+            pattern,
+            caseInsensitive,
+            pathPrefix: prefix,
+            ...(cursor !== undefined ? { cursor } : {}),
+          });
+        } catch (error) {
+          deps.context.recordSearchMode("rejected");
+          throw mapBackendError(error, "grep", prefix);
+        }
         if (!page.tailScanned) {
           tailLagged = true;
         }
         for (const match of page.matches) {
+          if (match.lineTruncated) {
+            lineTruncated = true;
+          }
           if (lines.length >= MAX_MATCHES) {
             truncated = true;
             break;
@@ -118,6 +129,9 @@ export function loonfsGrepCommand(deps: LoonFsGrepDeps): ReturnType<typeof defin
     }
     if (truncated) {
       stderr += `loonfs-grep: results truncated at ${MAX_MATCHES} matches; narrow the pattern or prefix\n`;
+    }
+    if (lineTruncated) {
+      stderr += "loonfs-grep: note: one or more matching lines were truncated by the server\n";
     }
     return {
       stdout: lines.length > 0 ? `${lines.join("\n")}\n` : "",
