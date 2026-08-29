@@ -7,7 +7,9 @@ export const DEFAULT_WORKSPACE_LIMITS: Readonly<WorkspaceLimits> = Object.freeze
   maxWriteBytes: 32 * 1024 * 1024,
   maxAppendSourceBytes: 8 * 1024 * 1024,
   maxDirectoryEntries: 10_000,
-  maxIndexedPaths: 50_000,
+  maxTraversalEntries: 50_000,
+  maxCommandCount: 1_000,
+  maxLoopIterations: 10_000,
   maxMutationsPerExec: 1_000,
   maxLoonFsRequestsPerExec: 2_000,
 });

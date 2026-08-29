@@ -21,6 +21,8 @@ export interface MutationContextOptions {
 
 interface ExecutionState {
   counters: WorkspaceCounters;
+  heldWrites: Map<string, string>;
+  limitNotes: string[];
   message: string | undefined;
   modes: SearchMode[];
 }
@@ -53,12 +55,14 @@ export class MutationContext {
     const state = this.state();
     state.counters.mutations += 1;
     if (state.counters.mutations > this.maxMutations) {
-      throw fsError(
+      const error = fsError(
         "E2BIG",
         `this execution exceeded its ${this.maxMutations}-mutation budget`,
         "commit",
         path,
       );
+      this.noteLimit(error.message);
+      throw error;
     }
     return {
       commitId: `c_${randomUUID().replaceAll("-", "")}`,
@@ -71,13 +75,56 @@ export class MutationContext {
     const state = this.state();
     state.counters.requests += 1;
     if (state.counters.requests > this.maxRequests) {
-      throw fsError(
+      const error = fsError(
         "E2BIG",
         `this execution exceeded its ${this.maxRequests}-request budget`,
         syscall,
         path,
       );
+      this.noteLimit(error.message);
+      throw error;
     }
+  }
+
+  holdEmptyWrite(namespacePath: string, virtualPath: string): boolean {
+    const active = this.executions.getStore();
+    if (active === undefined) {
+      return false;
+    }
+    active.heldWrites.set(namespacePath, virtualPath);
+    return true;
+  }
+
+  heldWrite(namespacePath: string): boolean {
+    return this.executions.getStore()?.heldWrites.has(namespacePath) ?? false;
+  }
+
+  clearHeldWrite(namespacePath: string): void {
+    this.executions.getStore()?.heldWrites.delete(namespacePath);
+  }
+
+  takeHeldWrites(): Array<{ namespacePath: string; virtualPath: string }> {
+    const active = this.executions.getStore();
+    if (active === undefined) {
+      return [];
+    }
+    const entries = [...active.heldWrites].map(([namespacePath, virtualPath]) => ({
+      namespacePath,
+      virtualPath,
+    }));
+    active.heldWrites.clear();
+    return entries;
+  }
+
+  noteLimit(message: string): void {
+    const notes = this.state().limitNotes;
+    if (!notes.includes(message)) {
+      notes.push(message);
+    }
+  }
+
+  limitNotes(): string[] {
+    return [...this.state().limitNotes];
   }
 
   countRead(bytes: number): void {
@@ -96,6 +143,8 @@ export class MutationContext {
     const active = this.executions.getStore();
     if (active !== undefined) {
       active.counters = emptyCounters();
+      active.heldWrites.clear();
+      active.limitNotes = [];
       active.modes = [];
       return;
     }
@@ -130,7 +179,7 @@ export class MutationContext {
 }
 
 function emptyState(message?: string): ExecutionState {
-  return { counters: emptyCounters(), message, modes: [] };
+  return { counters: emptyCounters(), heldWrites: new Map(), limitNotes: [], message, modes: [] };
 }
 
 function emptyCounters(): WorkspaceCounters {

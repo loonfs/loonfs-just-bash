@@ -16,10 +16,15 @@ host filesystem, start arbitrary programs, or make arbitrary network requests.
 npm install @loonfs/just-bash
 ```
 
+The package is ESM-only and needs Node 20.18.1 or newer. TypeScript consumers
+need `"type": "module"` (or another ESM setup) for the top-level `await` in the
+examples.
+
 ## Quick start
 
 Connect the shell to an existing namespace. It mounts that namespace at
-`/workspace`.
+`/workspace`. The shell checks the server during creation and refuses to attach
+when the server does not speak LoonFS API v0.3.x.
 
 ```ts
 import { LoonFSClient } from "@loonfs/sdk/server";
@@ -58,6 +63,10 @@ conflict instead of silently replacing their work.
 - `/workspace` contains the LoonFS namespace. Changes there are durable.
 - `/tmp` is private scratch space. It disappears with the shell.
 - Pipes, redirects, variables, conditionals, loops, and `cd` work normally.
+- Redirected output becomes one durable revision when the command finishes. A
+  command that fails or hits a limit leaves the target file unchanged.
+- Every change is a LoonFS revision. Earlier revisions of a file stay
+  retrievable through the LoonFS SDK and CLI.
 - One shell runs one `exec()` call at a time.
 - Recursive `grep` uses LoonFS search when the server offers it. Other searches
   run inside the shell.
@@ -87,6 +96,9 @@ appends, writes, and LoonFS requests. Reaching a limit returns an error instead
 of silently truncating the result.
 
 Pass `limits` when creating the shell to change any of these defaults.
+Interpreter bounds are configurable too (`maxCommandCount`,
+`maxLoopIterations`, `maxTraversalEntries`). Run `workspace-info` inside the
+shell to see the effective limits.
 
 ## Development
 
@@ -97,9 +109,10 @@ npm run typecheck
 npm test
 ```
 
-See [`examples/design-partner.mjs`](examples/design-partner.mjs) for a runnable
-example. The integration tests use `../loonfs/target/debug/loonfs-server` when
-it exists, or the server set in `LOONFS_SERVER_BIN`.
+Run `npm run example` for a runnable example. It builds first and then runs
+[`examples/design-partner.mjs`](examples/design-partner.mjs). The integration
+tests use `../loonfs/target/debug/loonfs-server` when it exists, or the server
+set in `LOONFS_SERVER_BIN`.
 
 ## License
 

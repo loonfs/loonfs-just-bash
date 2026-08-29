@@ -15,7 +15,9 @@ export interface WorkspaceLimits {
   maxWriteBytes: number;
   maxAppendSourceBytes: number;
   maxDirectoryEntries: number;
-  maxIndexedPaths: number;
+  maxTraversalEntries: number;
+  maxCommandCount: number;
+  maxLoopIterations: number;
   maxMutationsPerExec: number;
   maxLoonFsRequestsPerExec: number;
 }

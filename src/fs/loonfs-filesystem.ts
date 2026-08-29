@@ -13,6 +13,7 @@ import type { LoonFsBackend, LoonFsEntry, WriteBehavior } from "../backend/backe
 import { DEFAULT_WORKSPACE_LIMITS } from "../limits.js";
 import type { WorkspaceAccess } from "../types.js";
 import { fsError, isBackendCondition, mapBackendError } from "./errors.js";
+import type { WorkspaceFsError } from "./errors.js";
 import type { MutationContext } from "./mutation-context.js";
 import { joinVirtualPaths, normalizeVirtualPath, toNamespacePath } from "./path.js";
 import { statFromEntry } from "./stat-mapping.js";
@@ -91,13 +92,16 @@ export class LoonFsFileSystem implements IFileSystem {
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
     const namespacePath = this.namespacePath(path, "open");
+    if (this.context?.heldWrite(namespacePath)) {
+      return new Uint8Array(0);
+    }
     const entry = await this.statEntry(namespacePath, "open", path);
     if (entry.kind === "directory") {
       throw fsError("EISDIR", "illegal operation on a directory", "read", path);
     }
     const sizeBytes = entry.file?.sizeBytes ?? 0;
     if (sizeBytes > this.maxReadBytes) {
-      throw fsError(
+      throw this.limitError(
         "EFBIG",
         `file is ${sizeBytes} bytes and the configured read limit is ${this.maxReadBytes}`,
         "read",
@@ -107,7 +111,7 @@ export class LoonFsFileSystem implements IFileSystem {
     const read = await this.request(() => this.backend.readFile(namespacePath), "read", path);
     this.context?.countRead(read.bytes.byteLength);
     if (read.bytes.byteLength > this.maxReadBytes) {
-      throw fsError(
+      throw this.limitError(
         "EFBIG",
         `the read returned ${read.bytes.byteLength} bytes and the configured read limit is ${this.maxReadBytes}`,
         "read",
@@ -119,11 +123,24 @@ export class LoonFsFileSystem implements IFileSystem {
 
   async exists(path: string): Promise<boolean> {
     const namespacePath = this.namespacePath(path, "stat");
+    if (this.context?.heldWrite(namespacePath)) {
+      return true;
+    }
     return (await this.optionalEntry(namespacePath, "stat", path)) !== undefined;
   }
 
   async stat(path: string): Promise<FsStat> {
     const namespacePath = this.namespacePath(path, "stat");
+    if (this.context?.heldWrite(namespacePath)) {
+      return {
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        mode: 0o644,
+        size: 0,
+        mtime: new Date(),
+      };
+    }
     const entry = await this.statEntry(namespacePath, "stat", path);
     return statFromEntry(entry, await this.namespaceIdOnce());
   }
@@ -176,7 +193,12 @@ export class LoonFsFileSystem implements IFileSystem {
   ): Promise<void> {
     const context = this.writable("write", path);
     const bytes = encodeContent(content, options);
-    const namespacePath = this.namespacePath(path, "write");
+    const normalizedVirtualPath = normalizeVirtualPath(path, "write");
+    const namespacePath = toNamespacePath(normalizedVirtualPath, this.namespaceRoot);
+    if (bytes.byteLength === 0 && context.holdEmptyWrite(namespacePath, normalizedVirtualPath)) {
+      return;
+    }
+    context.clearHeldWrite(namespacePath);
     const existing = await this.optionalEntry(namespacePath, "write", path);
     await this.publish(context, namespacePath, bytes, existing, "write", path);
   }
@@ -193,7 +215,32 @@ export class LoonFsFileSystem implements IFileSystem {
     const context = this.writable("append", path);
     const suffix = encodeContent(content, options);
     const namespacePath = this.namespacePath(path, "append");
+    if (context.heldWrite(namespacePath)) {
+      if (suffix.byteLength === 0) {
+        return;
+      }
+      context.clearHeldWrite(namespacePath);
+      const existing = await this.optionalEntry(namespacePath, "append", path);
+      if (existing?.kind === "directory") {
+        throw fsError("EISDIR", "illegal operation on a directory", "append", path);
+      }
+      await this.publish(context, namespacePath, suffix, existing, "append", path);
+      return;
+    }
     const existing = await this.optionalEntry(namespacePath, "append", path);
+    if (suffix.byteLength === 0) {
+      if (existing?.kind === "directory") {
+        throw fsError("EISDIR", "illegal operation on a directory", "append", path);
+      }
+      if (existing !== undefined) {
+        return;
+      }
+      if (context.holdEmptyWrite(namespacePath, normalizeVirtualPath(path, "append"))) {
+        return;
+      }
+      await this.publish(context, namespacePath, suffix, undefined, "append", path);
+      return;
+    }
     if (existing === undefined) {
       await this.publish(context, namespacePath, suffix, undefined, "append", path);
       return;
@@ -203,7 +250,7 @@ export class LoonFsFileSystem implements IFileSystem {
     }
     const sizeBytes = existing.file?.sizeBytes ?? 0;
     if (sizeBytes > this.maxAppendSourceBytes) {
-      throw fsError(
+      throw this.limitError(
         "EFBIG",
         `append would rewrite a LoonFS file larger than the configured ${this.maxAppendSourceBytes}-byte limit; use /tmp for scratch append or publish a complete replacement`,
         "append",
@@ -213,7 +260,7 @@ export class LoonFsFileSystem implements IFileSystem {
     const read = await this.request(() => this.backend.readFile(namespacePath), "append", path);
     this.context?.countRead(read.bytes.byteLength);
     if (read.bytes.byteLength > this.maxAppendSourceBytes) {
-      throw fsError(
+      throw this.limitError(
         "EFBIG",
         `append read ${read.bytes.byteLength} bytes, exceeding the configured ${this.maxAppendSourceBytes}-byte source limit; retry against the current revision or publish a complete replacement`,
         "append",
@@ -221,7 +268,7 @@ export class LoonFsFileSystem implements IFileSystem {
       );
     }
     if (suffix.byteLength > this.maxWriteBytes - read.bytes.byteLength) {
-      throw fsError(
+      throw this.limitError(
         "EFBIG",
         `append would write ${read.bytes.byteLength + suffix.byteLength} bytes and the configured write limit is ${this.maxWriteBytes}`,
         "append",
@@ -237,6 +284,7 @@ export class LoonFsFileSystem implements IFileSystem {
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
     const context = this.writable("mkdir", path);
     const namespacePath = this.namespacePath(path, "mkdir");
+    context.clearHeldWrite(namespacePath);
     await this.request(
       () =>
         this.backend.createDirectory(namespacePath, {
@@ -251,6 +299,7 @@ export class LoonFsFileSystem implements IFileSystem {
   async rm(path: string, options?: RmOptions): Promise<void> {
     const context = this.writable("rm", path);
     const namespacePath = this.namespacePath(path, "rm");
+    context.clearHeldWrite(namespacePath);
     const existing = await this.optionalEntry(namespacePath, "rm", path);
     if (existing === undefined) {
       if (options?.force) {
@@ -281,9 +330,11 @@ export class LoonFsFileSystem implements IFileSystem {
   async cp(src: string, dest: string, options?: CpOptions): Promise<void> {
     const context = this.writable("cp", src);
     const sourcePath = this.namespacePath(src, "cp");
+    const destinationPath = this.namespacePath(dest, "cp");
+    context.clearHeldWrite(destinationPath);
     const source = await this.statEntry(sourcePath, "cp", src);
     if (source.kind === "file") {
-      await this.copyOne(context, sourcePath, this.namespacePath(dest, "cp"), src, dest);
+      await this.copyOne(context, sourcePath, destinationPath, src, dest);
       return;
     }
     if (!options?.recursive) {
@@ -294,9 +345,13 @@ export class LoonFsFileSystem implements IFileSystem {
 
   async mv(src: string, dest: string): Promise<void> {
     const context = this.writable("rename", src);
+    const sourcePath = this.namespacePath(src, "rename");
+    const destinationPath = this.namespacePath(dest, "rename");
+    context.clearHeldWrite(sourcePath);
+    context.clearHeldWrite(destinationPath);
     await this.request(
       () =>
-        this.backend.movePath(this.namespacePath(src, "rename"), this.namespacePath(dest, "rename"), {
+        this.backend.movePath(sourcePath, destinationPath, {
           behavior: "replace",
           commit: context.mintCommit(src),
         }),
@@ -330,6 +385,37 @@ export class LoonFsFileSystem implements IFileSystem {
     throw fsError("ENOTSUP", "LoonFS timestamps are set by commits, not by utimes", "utimes", path);
   }
 
+  async settleHeldWrites(): Promise<Array<{ path: string; error: Error }>> {
+    const failures: Array<{ path: string; error: Error }> = [];
+    for (const { namespacePath, virtualPath } of this.context?.takeHeldWrites() ?? []) {
+      try {
+        const context = this.writable("write", virtualPath);
+        const existing = await this.optionalEntry(namespacePath, "write", virtualPath);
+        if (existing?.kind === "directory") {
+          throw fsError("EISDIR", "illegal operation on a directory", "write", virtualPath);
+        }
+        await this.publish(
+          context,
+          namespacePath,
+          new Uint8Array(0),
+          existing,
+          "write",
+          virtualPath,
+        );
+      } catch (error) {
+        failures.push({
+          path: virtualPath,
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    }
+    return failures;
+  }
+
+  discardHeldWrites(): string[] {
+    return (this.context?.takeHeldWrites() ?? []).map(({ virtualPath }) => virtualPath);
+  }
+
   private async publish(
     context: MutationContext,
     namespacePath: string,
@@ -342,7 +428,7 @@ export class LoonFsFileSystem implements IFileSystem {
       throw fsError("EISDIR", "illegal operation on a directory", syscall, path);
     }
     if (bytes.byteLength > this.maxWriteBytes) {
-      throw fsError(
+      throw this.limitError(
         "EFBIG",
         `write is ${bytes.byteLength} bytes and the configured write limit is ${this.maxWriteBytes}`,
         syscall,
@@ -418,6 +504,17 @@ export class LoonFsFileSystem implements IFileSystem {
     return this.context;
   }
 
+  private limitError(
+    code: string,
+    description: string,
+    syscall: string,
+    path: string,
+  ): WorkspaceFsError {
+    const error = fsError(code, description, syscall, path);
+    this.context?.noteLimit(error.message);
+    return error;
+  }
+
   private namespacePath(path: string, syscall: string): string {
     return toNamespacePath(normalizeVirtualPath(path, syscall), this.namespaceRoot);
   }
@@ -474,7 +571,7 @@ export class LoonFsFileSystem implements IFileSystem {
       );
       entries.push(...page.entries);
       if (entries.length > this.maxDirectoryEntries) {
-        throw fsError(
+        throw this.limitError(
           "E2BIG",
           `directory exceeds the configured ${this.maxDirectoryEntries}-entry listing limit; narrow the operation`,
           "scandir",

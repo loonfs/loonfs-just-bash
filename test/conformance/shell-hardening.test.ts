@@ -35,7 +35,7 @@ describe("execution result hardening", () => {
     const result = await ws.exec("echo committed > kept.txt && cat kept.txt");
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("committed\n");
-    expect(result.mutations).toBe(2);
+    expect(result.mutations).toBe(1);
     expect(result.headSeqAfter).toBeUndefined();
     expect(
       new TextDecoder().decode((await backend.readFile("/kept.txt")).bytes),
@@ -141,7 +141,7 @@ describe("execution result hardening", () => {
     expect(summary.message).toBe("record a");
     expect(summary.exitCode).toBe(0);
     expect(summary.requests).toBeGreaterThan(0);
-    expect(summary.mutations).toBe(2);
+    expect(summary.mutations).toBe(1);
     expect(summary.bytesWritten).toBe(4);
     expect(summary.durationMs).toBeGreaterThanOrEqual(0);
     expect(summary.headSeqAfter).toBeGreaterThan(summary.headSeqBefore ?? 0);

@@ -159,6 +159,38 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     expect((await ws.exec("cat contested.txt")).stdout).toBe("external edit\n");
   }, 30_000);
 
+  it("keeps rejected redirected writes off the durable head", async () => {
+    const seeded = await shell();
+    await seeded.exec("printf ORIGINAL-CONTENT > staged-rejection.txt");
+    const backend = new HttpLoonFsBackend({ client, namespaceId: NAMESPACE });
+    const before = (await backend.getNamespace()).headSeq;
+    const oversized = await createLoonFsWorkspaceShell({
+      client,
+      namespaceId: NAMESPACE,
+      actor,
+      access: "read-write",
+      limits: { maxWriteBytes: 8 },
+    });
+    expect(
+      (await oversized.exec("printf 0123456789 > /workspace/staged-rejection.txt")).exitCode,
+    ).not.toBe(0);
+    const boundedLoop = await createLoonFsWorkspaceShell({
+      client,
+      namespaceId: NAMESPACE,
+      actor,
+      access: "read-write",
+      limits: { maxLoopIterations: 16 },
+    });
+    expect(
+      (await boundedLoop.exec("seq 1 400 > /workspace/staged-rejection.txt")).exitCode,
+    ).toBe(126);
+    expect((await seeded.exec("cat staged-rejection.txt")).stdout).toBe("ORIGINAL-CONTENT");
+    expect((await backend.getNamespace()).headSeq).toBe(before);
+    const written = await seeded.exec("echo hi > staged-rejection.txt");
+    expect(written.mutations).toBe(1);
+    expect(written.headSeqAfter).toBe((written.headSeqBefore ?? 0) + 1);
+  }, 30_000);
+
   it("replays a committed mutation under its commit identity", async () => {
     const backend = new HttpLoonFsBackend({ client, namespaceId: NAMESPACE });
     const commit = { commitId: `c_${crypto.randomUUID().replaceAll("-", "")}`, actor };

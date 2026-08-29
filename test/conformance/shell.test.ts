@@ -30,8 +30,7 @@ describe("LoonFsWorkspaceShell", () => {
     expect(write.stdout).toBe("done\n");
     expect(write.headSeqAfter).toBeGreaterThan(write.headSeqBefore ?? 0);
     expect(write.requests).toBeGreaterThan(0);
-    // A shell redirect is truncate-then-write: two guarded revisions.
-    expect(write.mutations).toBe(2);
+    expect(write.mutations).toBe(1);
     expect(write.bytesWritten).toBe(5);
     const read = await ws.exec("cat contracts/acme.txt");
     expect(read.mutations).toBe(0);
@@ -52,6 +51,9 @@ describe("LoonFsWorkspaceShell", () => {
     expect(command.stdout).toContain("namespace: ns_customer_123");
     expect(command.stdout).toContain("posix_compatible: false");
     expect(command.stdout).toContain("append: bounded whole-file replacement");
+    expect(command.stdout).toContain("max_traversal_entries: 50000");
+    expect(command.stdout).toContain("max_command_count: 1000");
+    expect(command.stdout).toContain("max_loop_iterations: 10000");
     expect(command.stdout).toContain("max_loonfs_requests_per_exec: 2000");
     expect(command.stdout).toContain("max_execution_time_ms: 30000");
     expect(command.stdout).toContain("max_output_bytes: 2097152");
@@ -126,12 +128,12 @@ describe("LoonFsWorkspaceShell", () => {
     expect(explicit.exitCode).toBe(0);
   });
 
-  it("applies the configured indexed-path bound to interpreter traversals", async () => {
+  it("applies the configured traversal-entry bound to interpreter traversals", async () => {
     const backend = seededBackend();
     const ws = await createLoonFsWorkspaceShell({
       backend,
       actor,
-      limits: { maxIndexedPaths: 1 },
+      limits: { maxTraversalEntries: 1 },
     });
     const overflow = await ws.exec("find . -type f");
     expect(overflow.exitCode).not.toBe(0);
@@ -157,8 +159,8 @@ describe("LoonFsWorkspaceShell", () => {
       ws.exec("mkdir -p a1 && echo one > a1/one.txt"),
       ws.exec("mkdir -p b1 && echo two > b1/two.txt && echo three > b1/three.txt"),
     ]);
-    expect(a.mutations).toBe(3);
-    expect(b.mutations).toBe(5);
+    expect(a.mutations).toBe(2);
+    expect(b.mutations).toBe(3);
     expect((await ws.exec("cat a1/one.txt b1/two.txt b1/three.txt")).stdout).toBe(
       "one\ntwo\nthree\n",
     );

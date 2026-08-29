@@ -301,25 +301,30 @@ function mapClientError(error: unknown): LoonFsBackendError {
       body.message ??
         (transportFailure
           ? "the server could not be reached; the outcome of the request is unknown"
-          : `the server answered ${error.statusCode ?? "without a status"}`),
+          : error.statusCode === 404
+            ? "the server did not recognize this request; it may be older than this SDK"
+            : `the server answered ${error.statusCode ?? "without a status"}`),
       body.request_id ?? error.requestId,
     );
     mapped.cause = body.code;
     return mapped;
   }
-  if (error instanceof TypeError) {
+  if (error instanceof TypeError && error.message.toLowerCase().includes("fetch")) {
     return new LoonFsBackendError(
       "busy",
       "the server could not be reached; the outcome of the request is unknown",
     );
   }
-  return new LoonFsBackendError("internal", "the SDK could not complete the LoonFS request");
+  return new LoonFsBackendError(
+    "internal",
+    `the SDK could not complete the LoonFS request (${error instanceof Error ? error.name : typeof error})`,
+  );
 }
 
 function conditionForStatus(status: number | undefined): LoonFsBackendError["code"] {
   switch (status) {
     case 404:
-      return "not_found";
+      return "unsupported";
     case 401:
       return "unauthenticated";
     case 403:

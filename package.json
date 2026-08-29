@@ -29,6 +29,7 @@
   ],
   "scripts": {
     "build": "tsc",
+    "example": "npm run build && node examples/design-partner.mjs",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
