@@ -1,5 +1,4 @@
-import { LoonFSClient } from "@loonfs/sdk";
-import { putFile } from "@loonfs/sdk/transfers";
+import { LoonFSClient, putFile } from "@loonfs/sdk/server";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";

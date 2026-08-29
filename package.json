@@ -1,8 +1,19 @@
 {
   "name": "@loonfs/just-bash",
   "version": "0.0.1",
-  "private": true,
   "description": "Sandboxed workspace shell for durable, revisioned LoonFS namespaces",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loonfs/loonfs-just-bash.git"
+  },
+  "bugs": {
+    "url": "https://github.com/loonfs/loonfs-just-bash/issues"
+  },
+  "homepage": "https://github.com/loonfs/loonfs-just-bash#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "engines": {
     "node": ">=20.18.1"
@@ -24,10 +35,13 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@loonfs/sdk": "file:../loonfs-sdk-typescript",
     "just-bash": "3.4.2"
   },
+  "peerDependencies": {
+    "@loonfs/sdk": "^0.1.1"
+  },
   "devDependencies": {
+    "@loonfs/sdk": "^0.1.1",
     "@types/node": "^26.4.0",
     "eslint": "^9.34.0",
     "typescript": "^5.9.2",

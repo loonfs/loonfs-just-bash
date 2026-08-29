@@ -1,4 +1,4 @@
-import type { LoonFSClient } from "@loonfs/sdk";
+import type { LoonFSClient } from "@loonfs/sdk/server";
 import type { LoonFsBackend } from "./backend/backend.js";
 
 export interface LoonFsActor {

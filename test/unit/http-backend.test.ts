@@ -1,5 +1,4 @@
-import { LoonFSError } from "@loonfs/sdk";
-import type { LoonFSClient } from "@loonfs/sdk";
+import { LoonFSError, type LoonFSClient } from "@loonfs/sdk/server";
 import { describe, expect, it } from "vitest";
 import { HttpLoonFsBackend, LoonFsBackendError } from "../../src/index.js";
 import type { MutationCommit } from "../../src/index.js";

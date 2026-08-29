@@ -1,6 +1,5 @@
-import type { LoonFSClient, LoonFS } from "@loonfs/sdk";
-import { LoonFSError } from "@loonfs/sdk";
-import { getFile, putFile } from "@loonfs/sdk/transfers";
+import type { LoonFSClient, LoonFS } from "@loonfs/sdk/server";
+import { getFile, LoonFSError, putFile } from "@loonfs/sdk/server";
 import type {
   GrepPage,
   GrepQuery,

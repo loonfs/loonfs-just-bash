@@ -3,7 +3,7 @@
 //
 //   LOONFS_URL=http://127.0.0.1:9400 LOONFS_TOKEN=... NAMESPACE=ns_demo \
 //     node examples/design-partner.mjs
-import { LoonFSClient } from "@loonfs/sdk";
+import { LoonFSClient } from "@loonfs/sdk/server";
 import { createLoonFsWorkspaceShell } from "../dist/index.js";
 
 const client = new LoonFSClient({

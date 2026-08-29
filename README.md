@@ -3,8 +3,12 @@
 A sandboxed workspace shell for operating on a durable, revisioned LoonFS
 namespace. It uses familiar shell syntax but is not a POSIX filesystem.
 
+```sh
+npm install @loonfs/just-bash
+```
+
 ```ts
-import { LoonFSClient } from "@loonfs/sdk";
+import { LoonFSClient } from "@loonfs/sdk/server";
 import { createLoonFsWorkspaceShell } from "@loonfs/just-bash";
 
 const shell = await createLoonFsWorkspaceShell({
@@ -77,13 +81,10 @@ through `limits` at creation.
 
 ## Development
 
-`@loonfs/sdk` is not published yet; the dependency is a sibling clone, the
-same arrangement the other LoonFS applications use:
-
-```
-git clone git@github.com:loonfs/loonfs-sdk-typescript ../loonfs-sdk-typescript
-(cd ../loonfs-sdk-typescript && npm install && npm run build)
+```sh
 npm install
+npm run lint
+npm run typecheck
 npm test
 ```
 
@@ -92,3 +93,7 @@ at `../loonfs/target/debug/loonfs-server` (override with
 `LOONFS_SERVER_BIN`); it starts a private server on a local-fs store, runs
 the battery, and asserts guard conflicts against a second writer. A small
 runnable example lives at `examples/design-partner.mjs`.
+
+## License
+
+Apache-2.0.
