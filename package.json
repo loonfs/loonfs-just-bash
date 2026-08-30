@@ -1,6 +1,6 @@
 {
   "name": "@loonfs/just-bash",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Sandboxed workspace shell for durable, revisioned LoonFS namespaces",
   "license": "Apache-2.0",
   "repository": {

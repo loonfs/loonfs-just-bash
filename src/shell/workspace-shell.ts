@@ -232,6 +232,31 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       stderr = `${error instanceof Error ? error.message : String(error)}\n`;
       exitCode = 1;
     }
+    // The interpreter renders every read failure as missing, so the adapter rewrites refusals it knows.
+    const readFailures = this.context
+      .readFailures()
+      .map(([path, text]) => [this.workspacePath(path), text] as const);
+    if (readFailures.length > 0) {
+      stderr = stderr
+        .split("\n")
+        .map((line) => {
+          const match = /^([^\s:]+): (.+): No such file or directory$/.exec(line);
+          if (match === null) {
+            return line;
+          }
+          const command = match[1];
+          const printed = match[2];
+          if (command === undefined || printed === undefined) {
+            return line;
+          }
+          const failure = readFailures.find(
+            ([displayPath]) =>
+              printed === displayPath || displayPath.endsWith(`/${printed}`),
+          );
+          return failure === undefined ? line : `${command}: ${printed}: ${failure[1]}`;
+        })
+        .join("\n");
+    }
     // Interpreter limit aborts resolve as 124, or 126 with bash-prefixed stderr, so staged truncates must be dropped.
     const aborted =
       interpreterFailed || exitCode === 124 || (exitCode === 126 && stderr.includes("bash: "));

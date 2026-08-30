@@ -32,6 +32,13 @@ interface WriteFileOptions {
   encoding?: TextEncodingName;
 }
 
+const READ_FAILURE_TEXT: Record<string, string> = {
+  EFBIG: "File too large",
+  EAGAIN: "Resource temporarily unavailable",
+  EACCES: "Permission denied",
+  EIO: "Input/output error",
+};
+
 export interface LoonFsFileSystemOptions {
   backend: LoonFsBackend;
   namespaceRoot?: string;
@@ -91,34 +98,47 @@ export class LoonFsFileSystem implements IFileSystem {
   }
 
   async readFileBuffer(path: string): Promise<Uint8Array> {
-    const namespacePath = this.namespacePath(path, "open");
+    const normalizedVirtualPath = normalizeVirtualPath(path, "open");
+    const namespacePath = toNamespacePath(normalizedVirtualPath, this.namespaceRoot);
     if (this.context?.heldWrite(namespacePath)) {
       return new Uint8Array(0);
     }
-    const entry = await this.statEntry(namespacePath, "open", path);
-    if (entry.kind === "directory") {
-      throw fsError("EISDIR", "illegal operation on a directory", "read", path);
+    try {
+      const entry = await this.statEntry(namespacePath, "open", path);
+      if (entry.kind === "directory") {
+        throw fsError("EISDIR", "illegal operation on a directory", "read", path);
+      }
+      const sizeBytes = entry.file?.sizeBytes ?? 0;
+      if (sizeBytes > this.maxReadBytes) {
+        throw this.limitError(
+          "EFBIG",
+          `file is ${sizeBytes} bytes and the configured read limit is ${this.maxReadBytes}`,
+          "read",
+          path,
+        );
+      }
+      const read = await this.request(() => this.backend.readFile(namespacePath), "read", path);
+      this.context?.countRead(read.bytes.byteLength);
+      if (read.bytes.byteLength > this.maxReadBytes) {
+        throw this.limitError(
+          "EFBIG",
+          `the read returned ${read.bytes.byteLength} bytes and the configured read limit is ${this.maxReadBytes}`,
+          "read",
+          path,
+        );
+      }
+      return read.bytes;
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null && "code" in error
+          ? error.code
+          : undefined;
+      const text = typeof code === "string" ? READ_FAILURE_TEXT[code] : undefined;
+      if (text !== undefined) {
+        this.context?.noteReadFailure(normalizedVirtualPath, text);
+      }
+      throw error;
     }
-    const sizeBytes = entry.file?.sizeBytes ?? 0;
-    if (sizeBytes > this.maxReadBytes) {
-      throw this.limitError(
-        "EFBIG",
-        `file is ${sizeBytes} bytes and the configured read limit is ${this.maxReadBytes}`,
-        "read",
-        path,
-      );
-    }
-    const read = await this.request(() => this.backend.readFile(namespacePath), "read", path);
-    this.context?.countRead(read.bytes.byteLength);
-    if (read.bytes.byteLength > this.maxReadBytes) {
-      throw this.limitError(
-        "EFBIG",
-        `the read returned ${read.bytes.byteLength} bytes and the configured read limit is ${this.maxReadBytes}`,
-        "read",
-        path,
-      );
-    }
-    return read.bytes;
   }
 
   async exists(path: string): Promise<boolean> {
