@@ -21,7 +21,6 @@ export interface LoonFsCapabilities {
   serverGrep: boolean;
   changeFeed: boolean;
   attributes: boolean;
-  writeGuards: boolean;
 }
 
 export interface LoonFsNamespaceInfo {
@@ -137,8 +136,8 @@ export interface LoonFsBackend {
     toPath: string,
     options: {
       behavior: WriteBehavior;
-      destinationExpectedInodeId?: string;
-      destinationExpectedRevisionNo?: number;
+      expectedDestinationInodeId?: string;
+      expectedDestinationRevisionNo?: number;
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt>;
@@ -147,8 +146,8 @@ export interface LoonFsBackend {
     toPath: string,
     options: {
       behavior: WriteBehavior;
-      destinationExpectedInodeId?: string;
-      destinationExpectedRevisionNo?: number;
+      expectedDestinationInodeId?: string;
+      expectedDestinationRevisionNo?: number;
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt>;

@@ -110,7 +110,6 @@ export class FakeLoonFsBackend implements LoonFsBackend {
       serverGrep: this.serverGrep !== undefined,
       changeFeed: false,
       attributes: false,
-      writeGuards: true,
     };
   }
 
@@ -212,6 +211,7 @@ export class FakeLoonFsBackend implements LoonFsBackend {
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {
+    requireInodeGuard(options.expectedInodeId, options.expectedRevisionNo);
     return this.mutate(
       options.commit,
       {
@@ -353,11 +353,15 @@ export class FakeLoonFsBackend implements LoonFsBackend {
     toPath: string,
     options: {
       behavior: WriteBehavior;
-      destinationExpectedInodeId?: string;
-      destinationExpectedRevisionNo?: number;
+      expectedDestinationInodeId?: string;
+      expectedDestinationRevisionNo?: number;
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {
+    requireInodeGuard(
+      options.expectedDestinationInodeId,
+      options.expectedDestinationRevisionNo,
+    );
     return this.mutate(
       options.commit,
       {
@@ -365,8 +369,8 @@ export class FakeLoonFsBackend implements LoonFsBackend {
         fromPath,
         toPath,
         behavior: options.behavior,
-        destinationExpectedInodeId: options.destinationExpectedInodeId,
-        destinationExpectedRevisionNo: options.destinationExpectedRevisionNo,
+        expectedDestinationInodeId: options.expectedDestinationInodeId,
+        expectedDestinationRevisionNo: options.expectedDestinationRevisionNo,
       },
       () => {
         const from = this.parentOf(fromPath);
@@ -380,8 +384,8 @@ export class FakeLoonFsBackend implements LoonFsBackend {
         const to = this.parentOf(toPath);
         this.claimDestination(to.directory, to.name, toPath, {
           behavior: options.behavior,
-          expectedInodeId: options.destinationExpectedInodeId,
-          expectedRevisionNo: options.destinationExpectedRevisionNo,
+          expectedInodeId: options.expectedDestinationInodeId,
+          expectedRevisionNo: options.expectedDestinationRevisionNo,
         });
         from.directory.children.delete(from.name);
         node.name = to.name;
@@ -396,11 +400,15 @@ export class FakeLoonFsBackend implements LoonFsBackend {
     toPath: string,
     options: {
       behavior: WriteBehavior;
-      destinationExpectedInodeId?: string;
-      destinationExpectedRevisionNo?: number;
+      expectedDestinationInodeId?: string;
+      expectedDestinationRevisionNo?: number;
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {
+    requireInodeGuard(
+      options.expectedDestinationInodeId,
+      options.expectedDestinationRevisionNo,
+    );
     return this.mutate(
       options.commit,
       {
@@ -408,8 +416,8 @@ export class FakeLoonFsBackend implements LoonFsBackend {
         fromPath,
         toPath,
         behavior: options.behavior,
-        destinationExpectedInodeId: options.destinationExpectedInodeId,
-        destinationExpectedRevisionNo: options.destinationExpectedRevisionNo,
+        expectedDestinationInodeId: options.expectedDestinationInodeId,
+        expectedDestinationRevisionNo: options.expectedDestinationRevisionNo,
       },
       () => {
         const source = this.resolve(fromPath);
@@ -419,8 +427,8 @@ export class FakeLoonFsBackend implements LoonFsBackend {
         const to = this.parentOf(toPath);
         const displaced = this.claimDestination(to.directory, to.name, toPath, {
           behavior: options.behavior,
-          expectedInodeId: options.destinationExpectedInodeId,
-          expectedRevisionNo: options.destinationExpectedRevisionNo,
+          expectedInodeId: options.expectedDestinationInodeId,
+          expectedRevisionNo: options.expectedDestinationRevisionNo,
         });
         const copied: FakeFile = {
           kind: "file",
@@ -603,5 +611,17 @@ export class FakeLoonFsBackend implements LoonFsBackend {
   private clock(): number {
     this.tick += 1;
     return 1_700_000_000_000 + this.tick * 1000;
+  }
+}
+
+function requireInodeGuard(
+  expectedInodeId: string | undefined,
+  expectedRevisionNo: number | undefined,
+): void {
+  if (expectedRevisionNo !== undefined && expectedInodeId === undefined) {
+    throw new LoonFsBackendError(
+      "invalid_path",
+      "a revision guard requires the matching inode guard",
+    );
   }
 }

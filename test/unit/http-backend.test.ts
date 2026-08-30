@@ -67,7 +67,6 @@ describe("HttpLoonFsBackend", () => {
             "query.grep": false,
             "core.changes": true,
             "core.attributes": false,
-            "core.write_guards": true,
           },
         }),
       },
@@ -76,7 +75,6 @@ describe("HttpLoonFsBackend", () => {
       serverGrep: false,
       changeFeed: true,
       attributes: false,
-      writeGuards: true,
     });
   });
 
@@ -95,14 +93,14 @@ describe("HttpLoonFsBackend", () => {
     });
     await backend.movePath("/source.txt", "/target.txt", {
       behavior: "replace",
-      destinationExpectedInodeId: "ino_target",
-      destinationExpectedRevisionNo: 5,
+      expectedDestinationInodeId: "ino_target",
+      expectedDestinationRevisionNo: 5,
       commit,
     });
     await backend.copyFile("/source.txt", "/target.txt", {
       behavior: "replace",
-      destinationExpectedInodeId: "ino_target",
-      destinationExpectedRevisionNo: 6,
+      expectedDestinationInodeId: "ino_target",
+      expectedDestinationRevisionNo: 6,
       commit,
     });
     expect(operations[0]).toMatchObject({
@@ -112,13 +110,13 @@ describe("HttpLoonFsBackend", () => {
     });
     expect(operations[1]).toMatchObject({
       kind: "move_path",
-      destination_expected_inode_id: "ino_target",
-      destination_expected_revision_no: 5,
+      expected_destination_inode_id: "ino_target",
+      expected_destination_revision_no: 5,
     });
     expect(operations[2]).toMatchObject({
       kind: "copy_path",
-      destination_expected_inode_id: "ino_target",
-      destination_expected_revision_no: 6,
+      expected_destination_inode_id: "ino_target",
+      expected_destination_revision_no: 6,
     });
   });
 
@@ -153,7 +151,7 @@ describe("HttpLoonFsBackend", () => {
     for (const method of ["movePath", "copyFile"] as const) {
       const error = await destinationBackend[method]("/source.txt", "/target.txt", {
         behavior: "replace",
-        destinationExpectedInodeId: "ino_target",
+        expectedDestinationInodeId: "ino_target",
         commit,
       }).catch((caught: LoonFsBackendError) => caught);
       expect(error.code, method).toBe("raced_binding");

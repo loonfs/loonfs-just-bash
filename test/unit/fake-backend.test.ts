@@ -68,6 +68,7 @@ describe("FakeLoonFsBackend", () => {
   it("guards writes with behavior and expected revision", async () => {
     const backend = seeded();
     const bytes = new TextEncoder().encode("v2");
+    const target = await backend.stat("/readme.md");
     expect(
       await code(
         backend.writeFile("/readme.md", bytes, { behavior: "no-replace", commit: commit(1) }),
@@ -77,6 +78,7 @@ describe("FakeLoonFsBackend", () => {
       await code(
         backend.writeFile("/readme.md", bytes, {
           behavior: "replace",
+          expectedInodeId: target.inodeId,
           expectedRevisionNo: 99,
           commit: commit(2),
         }),
@@ -84,10 +86,25 @@ describe("FakeLoonFsBackend", () => {
     ).toBe("stale_revision");
     const receipt = await backend.writeFile("/readme.md", bytes, {
       behavior: "replace",
+      expectedInodeId: target.inodeId,
       expectedRevisionNo: 1,
       commit: commit(3),
     });
     expect(receipt.entry?.file?.revisionNo).toBe(2);
+  });
+
+  it("rejects a write revision guard without its inode guard", async () => {
+    const backend = seeded();
+    await expect(
+      backend.writeFile("/readme.md", new TextEncoder().encode("replacement"), {
+        behavior: "replace",
+        expectedRevisionNo: 1,
+        commit: commit(1),
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_path",
+      message: "a revision guard requires the matching inode guard",
+    });
   });
 
   it("rejects a write when the inode guard does not match", async () => {
@@ -199,8 +216,8 @@ describe("FakeLoonFsBackend", () => {
       const inodeTarget = await inodeBackend.stat("/readme.md");
       const inodeMismatch = inodeBackend[method]("/contracts/acme.txt", "/readme.md", {
         behavior: "replace",
-        destinationExpectedInodeId: "ino_9999",
-        destinationExpectedRevisionNo: inodeTarget.file?.revisionNo,
+        expectedDestinationInodeId: "ino_9999",
+        expectedDestinationRevisionNo: inodeTarget.file?.revisionNo,
         commit: commit(method === "movePath" ? 1 : 2),
       });
       expect(await code(inodeMismatch), method).toBe("raced_binding");
@@ -209,12 +226,26 @@ describe("FakeLoonFsBackend", () => {
       const revisionTarget = await revisionBackend.stat("/readme.md");
       const revisionMismatch = revisionBackend[method]("/contracts/acme.txt", "/readme.md", {
         behavior: "replace",
-        destinationExpectedInodeId: revisionTarget.inodeId,
-        destinationExpectedRevisionNo: 99,
+        expectedDestinationInodeId: revisionTarget.inodeId,
+        expectedDestinationRevisionNo: 99,
         commit: commit(method === "movePath" ? 3 : 4),
       });
       expect(await code(revisionMismatch), method).toBe("stale_revision");
     }
+  });
+
+  it("rejects a move revision guard without its destination inode guard", async () => {
+    const backend = seeded();
+    await expect(
+      backend.movePath("/contracts/acme.txt", "/readme.md", {
+        behavior: "replace",
+        expectedDestinationRevisionNo: 1,
+        commit: commit(1),
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_path",
+      message: "a revision guard requires the matching inode guard",
+    });
   });
 
   it("rejects vacant and contradictory guarded destinations", async () => {
@@ -224,7 +255,7 @@ describe("FakeLoonFsBackend", () => {
         await code(
           backend[method]("/contracts/acme.txt", "/missing.txt", {
             behavior: "replace",
-            destinationExpectedInodeId: "ino_missing",
+            expectedDestinationInodeId: "ino_missing",
             commit: commit(method === "movePath" ? 1 : 2),
           }),
         ),
@@ -234,7 +265,8 @@ describe("FakeLoonFsBackend", () => {
         await code(
           backend[method]("/contracts/acme.txt", "/other-missing.txt", {
             behavior: "no-replace",
-            destinationExpectedRevisionNo: 1,
+            expectedDestinationInodeId: "ino_missing",
+            expectedDestinationRevisionNo: 1,
             commit: commit(method === "movePath" ? 3 : 4),
           }),
         ),

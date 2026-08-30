@@ -41,7 +41,6 @@ export class HttpLoonFsBackend implements LoonFsBackend {
       serverGrep: features["query.grep"] === true,
       changeFeed: features["core.changes"] === true,
       attributes: features["core.attributes"] === true,
-      writeGuards: features["core.write_guards"] === true,
     };
   }
 
@@ -162,22 +161,22 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     toPath: string,
     options: {
       behavior: WriteBehavior;
-      destinationExpectedInodeId?: string;
-      destinationExpectedRevisionNo?: number;
+      expectedDestinationInodeId?: string;
+      expectedDestinationRevisionNo?: number;
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {
-    return withIdentityGuard(options.destinationExpectedInodeId, () =>
+    return withIdentityGuard(options.expectedDestinationInodeId, () =>
       this.commitOne(options.commit, {
         kind: "move_path",
         from_path: fromPath,
         to_path: toPath,
         behavior: options.behavior === "replace" ? "replace" : "no_replace",
-        ...(options.destinationExpectedInodeId !== undefined
-          ? { destination_expected_inode_id: options.destinationExpectedInodeId }
+        ...(options.expectedDestinationInodeId !== undefined
+          ? { expected_destination_inode_id: options.expectedDestinationInodeId }
           : {}),
-        ...(options.destinationExpectedRevisionNo !== undefined
-          ? { destination_expected_revision_no: options.destinationExpectedRevisionNo }
+        ...(options.expectedDestinationRevisionNo !== undefined
+          ? { expected_destination_revision_no: options.expectedDestinationRevisionNo }
           : {}),
       }),
     );
@@ -188,22 +187,22 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     toPath: string,
     options: {
       behavior: WriteBehavior;
-      destinationExpectedInodeId?: string;
-      destinationExpectedRevisionNo?: number;
+      expectedDestinationInodeId?: string;
+      expectedDestinationRevisionNo?: number;
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {
-    return withIdentityGuard(options.destinationExpectedInodeId, () =>
+    return withIdentityGuard(options.expectedDestinationInodeId, () =>
       this.commitOne(options.commit, {
         kind: "copy_path",
         from_path: fromPath,
         to_path: toPath,
         behavior: options.behavior === "replace" ? "replace" : "no_replace",
-        ...(options.destinationExpectedInodeId !== undefined
-          ? { destination_expected_inode_id: options.destinationExpectedInodeId }
+        ...(options.expectedDestinationInodeId !== undefined
+          ? { expected_destination_inode_id: options.expectedDestinationInodeId }
           : {}),
-        ...(options.destinationExpectedRevisionNo !== undefined
-          ? { destination_expected_revision_no: options.destinationExpectedRevisionNo }
+        ...(options.expectedDestinationRevisionNo !== undefined
+          ? { expected_destination_revision_no: options.expectedDestinationRevisionNo }
           : {}),
       }),
     );

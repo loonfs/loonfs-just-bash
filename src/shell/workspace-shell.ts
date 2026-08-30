@@ -51,11 +51,6 @@ export async function createLoonFsWorkspaceShell(
     }
     throw error;
   }
-  if (!capabilities.writeGuards) {
-    throw new Error(
-      "the LoonFS server does not advertise core.write_guards; this package needs a server with identity-guarded writes",
-    );
-  }
   const context = new MutationContext({
     actor: options.actor,
     maxMutationsPerExec: limits.maxMutationsPerExec,

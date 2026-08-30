@@ -731,9 +731,9 @@ function guardedDestinationOptions(
   }
   return {
     behavior: "replace",
-    destinationExpectedInodeId: destination.inodeId,
+    expectedDestinationInodeId: destination.inodeId,
     ...(destination.file?.revisionNo !== undefined
-      ? { destinationExpectedRevisionNo: destination.file.revisionNo }
+      ? { expectedDestinationRevisionNo: destination.file.revisionNo }
       : {}),
     commit,
   };

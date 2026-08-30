@@ -85,8 +85,8 @@ export class SessionBackend implements LoonFsBackend {
     toPath: string,
     options: {
       behavior: WriteBehavior;
-      destinationExpectedInodeId?: string;
-      destinationExpectedRevisionNo?: number;
+      expectedDestinationInodeId?: string;
+      expectedDestinationRevisionNo?: number;
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {
@@ -98,8 +98,8 @@ export class SessionBackend implements LoonFsBackend {
     toPath: string,
     options: {
       behavior: WriteBehavior;
-      destinationExpectedInodeId?: string;
-      destinationExpectedRevisionNo?: number;
+      expectedDestinationInodeId?: string;
+      expectedDestinationRevisionNo?: number;
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {

@@ -159,6 +159,7 @@ describe("staged workspace writes", () => {
             }
             await target.writeFile("/target.txt", new TextEncoder().encode("external"), {
               behavior: "replace",
+              expectedInodeId: observed.inodeId,
               expectedRevisionNo,
               commit: { commitId: "c_external1", actor },
             });
@@ -209,6 +210,7 @@ describe("staged workspace writes", () => {
       }
       await backend.writeFile("/target.txt", new TextEncoder().encode("EXTERNAL"), {
         behavior: "replace",
+        expectedInodeId: observed.inodeId,
         expectedRevisionNo,
         commit: externalCommit(),
       });
@@ -233,6 +235,7 @@ describe("staged workspace writes", () => {
       }
       await backend.writeFile("/target.txt", new TextEncoder().encode("EXTERNAL"), {
         behavior: "replace",
+        expectedInodeId: observed.inodeId,
         expectedRevisionNo,
         commit: externalCommit(),
       });
@@ -445,20 +448,6 @@ describe("staged workspace writes", () => {
       },
     }) as unknown as LoonFsBackend;
     await expect(shell(outdated)).rejects.toThrow(/v0\.3/);
-  });
-
-  it("construction refuses a server without write guards", async () => {
-    const backend = new FakeLoonFsBackend();
-    const outdated = new Proxy(backend, {
-      get(target, property, receiver) {
-        const value = Reflect.get(target, property, receiver);
-        if (property !== "getCapabilities" || typeof value !== "function") {
-          return typeof value === "function" ? value.bind(target) : value;
-        }
-        return async () => ({ ...(await target.getCapabilities()), writeGuards: false });
-      },
-    }) as unknown as LoonFsBackend;
-    await expect(shell(outdated)).rejects.toThrow(/write_guards/);
   });
 
   it("a shell function named grep is left alone", async () => {
