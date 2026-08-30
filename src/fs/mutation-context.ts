@@ -30,6 +30,7 @@ interface ExecutionState {
   limitNotes: string[];
   message: string | undefined;
   modes: SearchMode[];
+  readFailures: Map<string, string>;
 }
 
 /**
@@ -157,6 +158,14 @@ export class MutationContext {
     return [...this.state().limitNotes];
   }
 
+  noteReadFailure(virtualPath: string, text: string): void {
+    this.state().readFailures.set(virtualPath, text);
+  }
+
+  readFailures(): Array<[string, string]> {
+    return [...this.state().readFailures];
+  }
+
   countRead(bytes: number): void {
     this.state().counters.bytesRead += bytes;
   }
@@ -176,6 +185,7 @@ export class MutationContext {
       active.heldWrites.clear();
       active.limitNotes = [];
       active.modes = [];
+      active.readFailures.clear();
       return;
     }
     this.fallbackState = emptyState();
@@ -209,7 +219,14 @@ export class MutationContext {
 }
 
 function emptyState(message?: string): ExecutionState {
-  return { counters: emptyCounters(), heldWrites: new Map(), limitNotes: [], message, modes: [] };
+  return {
+    counters: emptyCounters(),
+    heldWrites: new Map(),
+    limitNotes: [],
+    message,
+    modes: [],
+    readFailures: new Map(),
+  };
 }
 
 function emptyCounters(): WorkspaceCounters {

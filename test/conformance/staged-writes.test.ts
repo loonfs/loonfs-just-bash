@@ -283,8 +283,54 @@ describe("staged workspace writes", () => {
     const ws = await shell(backend, { maxReadBytes: 4 });
     const result = await ws.exec("cat /workspace/docs/data.json");
     expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).not.toContain("No such file or directory");
+    expect(result.stderr).toContain("cat: /workspace/docs/data.json: File too large");
     expect(result.stderr).toContain("loonfs: EFBIG");
     expect(result.stderr).toContain("read limit is 4");
+  });
+
+  it("a relative read failure is rewritten too", async () => {
+    const backend = new FakeLoonFsBackend();
+    backend.seedFile("/docs/data.json", "1234567890123456789012345678901");
+    const ws = await shell(backend, { maxReadBytes: 4 });
+    const result = await ws.exec("cat docs/data.json");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("cat: docs/data.json: File too large");
+    expect(result.stderr).not.toContain("No such file or directory");
+  });
+
+  it("a genuinely missing file keeps its message", async () => {
+    const backend = new FakeLoonFsBackend();
+    const ws = await shell(backend);
+    const result = await ws.exec("cat /workspace/really-missing.txt");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain(
+      "cat: /workspace/really-missing.txt: No such file or directory",
+    );
+  });
+
+  it("an unreachable backend read says so", async () => {
+    const backend = new FakeLoonFsBackend();
+    backend.seedFile("/docs/data.json", "available later");
+    const unreachable = new Proxy(backend, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== "readFile" || typeof value !== "function") {
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return async () => {
+          throw new LoonFsBackendError(
+            "busy",
+            "the server asked this session to retry later",
+          );
+        };
+      },
+    }) as unknown as LoonFsBackend;
+    const ws = await shell(unreachable);
+    const result = await ws.exec("cat /workspace/docs/data.json");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("Resource temporarily unavailable");
+    expect(result.stderr).not.toContain("No such file or directory");
   });
 
   it("construction refuses a server that cannot answer path reads", async () => {
