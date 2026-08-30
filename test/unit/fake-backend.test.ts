@@ -68,6 +68,7 @@ describe("FakeLoonFsBackend", () => {
   it("guards writes with behavior and expected revision", async () => {
     const backend = seeded();
     const bytes = new TextEncoder().encode("v2");
+    const target = await backend.stat("/readme.md");
     expect(
       await code(
         backend.writeFile("/readme.md", bytes, { behavior: "no-replace", commit: commit(1) }),
@@ -77,6 +78,7 @@ describe("FakeLoonFsBackend", () => {
       await code(
         backend.writeFile("/readme.md", bytes, {
           behavior: "replace",
+          expectedInodeId: target.inodeId,
           expectedRevisionNo: 99,
           commit: commit(2),
         }),
@@ -84,10 +86,52 @@ describe("FakeLoonFsBackend", () => {
     ).toBe("stale_revision");
     const receipt = await backend.writeFile("/readme.md", bytes, {
       behavior: "replace",
+      expectedInodeId: target.inodeId,
       expectedRevisionNo: 1,
       commit: commit(3),
     });
     expect(receipt.entry?.file?.revisionNo).toBe(2);
+  });
+
+  it("rejects a write revision guard without its inode guard", async () => {
+    const backend = seeded();
+    await expect(
+      backend.writeFile("/readme.md", new TextEncoder().encode("replacement"), {
+        behavior: "replace",
+        expectedRevisionNo: 1,
+        commit: commit(1),
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_path",
+      message: "a revision guard requires the matching inode guard",
+    });
+  });
+
+  it("rejects a write when the inode guard does not match", async () => {
+    const backend = seeded();
+    const result = backend.writeFile("/readme.md", new TextEncoder().encode("replacement"), {
+      behavior: "replace",
+      expectedInodeId: "ino_9999",
+      expectedRevisionNo: 1,
+      commit: commit(1),
+    });
+    expect(await code(result)).toBe("raced_binding");
+    expect(new TextDecoder().decode((await backend.readFile("/readme.md")).bytes)).toBe("hello");
+  });
+
+  it("mints a fresh inode when a deleted path is recreated", async () => {
+    const backend = seeded();
+    const before = await backend.stat("/readme.md");
+    await backend.deletePath("/readme.md", {
+      recursive: false,
+      expectedInodeId: before.inodeId,
+      commit: commit(1),
+    });
+    await backend.writeFile("/readme.md", new TextEncoder().encode("successor"), {
+      behavior: "no-replace",
+      commit: commit(2),
+    });
+    expect((await backend.stat("/readme.md")).inodeId).not.toBe(before.inodeId);
   });
 
   it("replays an applied commit id without re-checking guards", async () => {
@@ -164,6 +208,71 @@ describe("FakeLoonFsBackend", () => {
     expect(new TextDecoder().decode((await backend.readFile("/readme.md")).bytes)).toBe(
       "termination clause",
     );
+  });
+
+  it("checks destination inode and revision guards before moves and copies", async () => {
+    for (const method of ["movePath", "copyFile"] as const) {
+      const inodeBackend = seeded();
+      const inodeTarget = await inodeBackend.stat("/readme.md");
+      const inodeMismatch = inodeBackend[method]("/contracts/acme.txt", "/readme.md", {
+        behavior: "replace",
+        expectedDestinationInodeId: "ino_9999",
+        expectedDestinationRevisionNo: inodeTarget.file?.revisionNo,
+        commit: commit(method === "movePath" ? 1 : 2),
+      });
+      expect(await code(inodeMismatch), method).toBe("raced_binding");
+
+      const revisionBackend = seeded();
+      const revisionTarget = await revisionBackend.stat("/readme.md");
+      const revisionMismatch = revisionBackend[method]("/contracts/acme.txt", "/readme.md", {
+        behavior: "replace",
+        expectedDestinationInodeId: revisionTarget.inodeId,
+        expectedDestinationRevisionNo: 99,
+        commit: commit(method === "movePath" ? 3 : 4),
+      });
+      expect(await code(revisionMismatch), method).toBe("stale_revision");
+    }
+  });
+
+  it("rejects a move revision guard without its destination inode guard", async () => {
+    const backend = seeded();
+    await expect(
+      backend.movePath("/contracts/acme.txt", "/readme.md", {
+        behavior: "replace",
+        expectedDestinationRevisionNo: 1,
+        commit: commit(1),
+      }),
+    ).rejects.toMatchObject({
+      code: "invalid_path",
+      message: "a revision guard requires the matching inode guard",
+    });
+  });
+
+  it("rejects vacant and contradictory guarded destinations", async () => {
+    for (const method of ["movePath", "copyFile"] as const) {
+      const backend = seeded();
+      expect(
+        await code(
+          backend[method]("/contracts/acme.txt", "/missing.txt", {
+            behavior: "replace",
+            expectedDestinationInodeId: "ino_missing",
+            commit: commit(method === "movePath" ? 1 : 2),
+          }),
+        ),
+        method,
+      ).toBe("not_found");
+      expect(
+        await code(
+          backend[method]("/contracts/acme.txt", "/other-missing.txt", {
+            behavior: "no-replace",
+            expectedDestinationInodeId: "ino_missing",
+            expectedDestinationRevisionNo: 1,
+            commit: commit(method === "movePath" ? 3 : 4),
+          }),
+        ),
+        method,
+      ).toBe("internal");
+    }
   });
 
   it("is deterministic across instances", async () => {

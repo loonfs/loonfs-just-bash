@@ -7,6 +7,7 @@ import {
 import type {
   LoonFsBackend,
   LoonFsWorkspaceShell,
+  MutationCommit,
   WorkspaceLimits,
 } from "../../src/index.js";
 
@@ -30,6 +31,36 @@ async function read(backend: LoonFsBackend, path: string): Promise<string> {
   await fresh.close();
   expect(result.exitCode).toBe(0);
   return result.stdout;
+}
+
+let externalCommitNo = 0;
+
+function externalCommit(): MutationCommit {
+  externalCommitNo += 1;
+  return { commitId: `c_external_${externalCommitNo}`, actor };
+}
+
+function interceptFirst(
+  backend: FakeLoonFsBackend,
+  method: "readFile" | "movePath" | "copyFile",
+  before: () => Promise<void>,
+): LoonFsBackend {
+  let pending = true;
+  return new Proxy(backend, {
+    get(target, property, receiver) {
+      const value = Reflect.get(target, property, receiver);
+      if (property !== method || typeof value !== "function") {
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return async (...args: unknown[]) => {
+        if (pending) {
+          pending = false;
+          await before();
+        }
+        return (value as (...callArgs: unknown[]) => unknown).apply(target, args);
+      };
+    },
+  }) as unknown as LoonFsBackend;
 }
 
 describe("staged workspace writes", () => {
@@ -128,6 +159,7 @@ describe("staged workspace writes", () => {
             }
             await target.writeFile("/target.txt", new TextEncoder().encode("external"), {
               behavior: "replace",
+              expectedInodeId: observed.inodeId,
               expectedRevisionNo,
               commit: { commitId: "c_external1", actor },
             });
@@ -141,6 +173,118 @@ describe("staged workspace writes", () => {
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("ESTALE");
     expect(await read(backend, "/workspace/target.txt")).toBe("external");
+  });
+
+  it("a delete and recreate does not satisfy a stale redirect", async () => {
+    const backend = new FakeLoonFsBackend();
+    backend.seedFile("/src.txt", "SOURCE");
+    backend.seedFile("/race.txt", "INITIAL");
+    const concurrent = interceptFirst(backend, "readFile", async () => {
+      const observed = await backend.stat("/race.txt");
+      await backend.deletePath("/race.txt", {
+        recursive: false,
+        expectedInodeId: observed.inodeId,
+        commit: externalCommit(),
+      });
+      await backend.writeFile("/race.txt", new TextEncoder().encode("B"), {
+        behavior: "no-replace",
+        commit: externalCommit(),
+      });
+    });
+    const ws = await shell(concurrent);
+    const result = await ws.exec("cat /workspace/src.txt > /workspace/race.txt");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("ESTALE");
+    expect(await read(backend, "/workspace/race.txt")).toBe("B");
+  });
+
+  it("a move does not replace a destination changed after it was read", async () => {
+    const backend = new FakeLoonFsBackend();
+    backend.seedFile("/source.txt", "SOURCE");
+    backend.seedFile("/target.txt", "INITIAL");
+    const concurrent = interceptFirst(backend, "movePath", async () => {
+      const observed = await backend.stat("/target.txt");
+      const expectedRevisionNo = observed.file?.revisionNo;
+      if (expectedRevisionNo === undefined) {
+        throw new Error("the move target has no file revision");
+      }
+      await backend.writeFile("/target.txt", new TextEncoder().encode("EXTERNAL"), {
+        behavior: "replace",
+        expectedInodeId: observed.inodeId,
+        expectedRevisionNo,
+        commit: externalCommit(),
+      });
+    });
+    const ws = await shell(concurrent);
+    const result = await ws.exec("mv /workspace/source.txt /workspace/target.txt");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("ESTALE");
+    expect(await read(backend, "/workspace/target.txt")).toBe("EXTERNAL");
+    await expect(backend.stat("/source.txt")).resolves.toBeDefined();
+  });
+
+  it("a copy does not replace a destination changed after it was read", async () => {
+    const backend = new FakeLoonFsBackend();
+    backend.seedFile("/source.txt", "SOURCE");
+    backend.seedFile("/target.txt", "INITIAL");
+    const concurrent = interceptFirst(backend, "copyFile", async () => {
+      const observed = await backend.stat("/target.txt");
+      const expectedRevisionNo = observed.file?.revisionNo;
+      if (expectedRevisionNo === undefined) {
+        throw new Error("the copy target has no file revision");
+      }
+      await backend.writeFile("/target.txt", new TextEncoder().encode("EXTERNAL"), {
+        behavior: "replace",
+        expectedInodeId: observed.inodeId,
+        expectedRevisionNo,
+        commit: externalCommit(),
+      });
+    });
+    const ws = await shell(concurrent);
+    const result = await ws.exec("cp /workspace/source.txt /workspace/target.txt");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("ESTALE");
+    expect(await read(backend, "/workspace/target.txt")).toBe("EXTERNAL");
+    await expect(backend.stat("/source.txt")).resolves.toBeDefined();
+  });
+
+  it("a move destination that vanished and returned is a conflict", async () => {
+    const backend = new FakeLoonFsBackend();
+    backend.seedFile("/source.txt", "SOURCE");
+    backend.seedFile("/target.txt", "INITIAL");
+    const concurrent = interceptFirst(backend, "movePath", async () => {
+      const observed = await backend.stat("/target.txt");
+      await backend.deletePath("/target.txt", {
+        recursive: false,
+        expectedInodeId: observed.inodeId,
+        commit: externalCommit(),
+      });
+      await backend.writeFile("/target.txt", new TextEncoder().encode("RETURNED"), {
+        behavior: "no-replace",
+        commit: externalCommit(),
+      });
+    });
+    const ws = await shell(concurrent);
+    const result = await ws.exec("mv /workspace/source.txt /workspace/target.txt");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("ESTALE");
+    expect(await read(backend, "/workspace/target.txt")).toBe("RETURNED");
+  });
+
+  it("a move onto a path created after it was read is a conflict", async () => {
+    const backend = new FakeLoonFsBackend();
+    backend.seedFile("/source.txt", "SOURCE");
+    const concurrent = interceptFirst(backend, "movePath", async () => {
+      await backend.writeFile("/target.txt", new TextEncoder().encode("CREATED"), {
+        behavior: "no-replace",
+        commit: externalCommit(),
+      });
+    });
+    const ws = await shell(concurrent);
+    const result = await ws.exec("mv /workspace/source.txt /workspace/target.txt");
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain("EEXIST");
+    expect(await read(backend, "/workspace/target.txt")).toBe("CREATED");
   });
 
   it("an invalid redirect target fails before the producer runs", async () => {

@@ -73,9 +73,11 @@ describe("guarded mutations under concurrency", () => {
     const { backend, beforeNext } = intercepting(fake);
     const { fs } = workspace(backend);
     beforeNext("writeFile", async () => {
+      const observed = await fake.stat("/report.md");
       await fake.writeFile("/report.md", new TextEncoder().encode("external edit"), {
         behavior: "replace",
-        expectedRevisionNo: 1,
+        expectedInodeId: observed.inodeId,
+        expectedRevisionNo: observed.file?.revisionNo,
         commit: externalCommit(),
       });
     });

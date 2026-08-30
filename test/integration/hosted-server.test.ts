@@ -159,6 +159,106 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     expect((await ws.exec("cat contested.txt")).stdout).toBe("external edit\n");
   }, 30_000);
 
+  it("keeps the conflict promise across delete and recreate", async () => {
+    const raw = new HttpLoonFsBackend({ client, namespaceId: NAMESPACE });
+    const bytes = (content: string) => new TextEncoder().encode(content);
+    await raw.writeFile("/guarded-cat-source.txt", bytes("SOURCE"), {
+      behavior: "no-replace",
+      commit: { commitId: crypto.randomUUID(), actor },
+    });
+    await raw.writeFile("/guarded-cat-target.txt", bytes("INITIAL"), {
+      behavior: "no-replace",
+      commit: { commitId: crypto.randomUUID(), actor },
+    });
+    let recreatePending = true;
+    const redirectBackend = new Proxy(raw, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== "readFile" || typeof value !== "function") {
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return async (...args: unknown[]) => {
+          if (recreatePending) {
+            recreatePending = false;
+            const observed = await target.stat("/guarded-cat-target.txt");
+            await target.deletePath("/guarded-cat-target.txt", {
+              recursive: false,
+              expectedInodeId: observed.inodeId,
+              commit: { commitId: crypto.randomUUID(), actor },
+            });
+            await target.writeFile("/guarded-cat-target.txt", bytes("B"), {
+              behavior: "no-replace",
+              commit: { commitId: crypto.randomUUID(), actor },
+            });
+          }
+          return (value as (...callArgs: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    }) as unknown as LoonFsBackend;
+    const redirectShell = await createLoonFsWorkspaceShell({
+      backend: redirectBackend,
+      actor,
+      access: "read-write",
+    });
+    const redirect = await redirectShell.exec(
+      "cat /workspace/guarded-cat-source.txt > /workspace/guarded-cat-target.txt",
+    );
+    expect(redirect.exitCode).not.toBe(0);
+    expect(redirect.stderr).toContain("ESTALE");
+    expect(new TextDecoder().decode((await raw.readFile("/guarded-cat-target.txt")).bytes)).toBe(
+      "B",
+    );
+
+    await raw.writeFile("/guarded-move-source.txt", bytes("SOURCE"), {
+      behavior: "no-replace",
+      commit: { commitId: crypto.randomUUID(), actor },
+    });
+    await raw.writeFile("/guarded-move-target.txt", bytes("INITIAL"), {
+      behavior: "no-replace",
+      commit: { commitId: crypto.randomUUID(), actor },
+    });
+    let updatePending = true;
+    const moveBackend = new Proxy(raw, {
+      get(target, property, receiver) {
+        const value = Reflect.get(target, property, receiver);
+        if (property !== "movePath" || typeof value !== "function") {
+          return typeof value === "function" ? value.bind(target) : value;
+        }
+        return async (...args: unknown[]) => {
+          if (updatePending) {
+            updatePending = false;
+            const observed = await target.stat("/guarded-move-target.txt");
+            const expectedRevisionNo = observed.file?.revisionNo;
+            if (expectedRevisionNo === undefined) {
+              throw new Error("the move target has no file revision");
+            }
+            await target.writeFile("/guarded-move-target.txt", bytes("EXTERNAL"), {
+              behavior: "replace",
+              expectedInodeId: observed.inodeId,
+              expectedRevisionNo,
+              commit: { commitId: crypto.randomUUID(), actor },
+            });
+          }
+          return (value as (...callArgs: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    }) as unknown as LoonFsBackend;
+    const moveShell = await createLoonFsWorkspaceShell({
+      backend: moveBackend,
+      actor,
+      access: "read-write",
+    });
+    const move = await moveShell.exec(
+      "mv /workspace/guarded-move-source.txt /workspace/guarded-move-target.txt",
+    );
+    expect(move.exitCode).not.toBe(0);
+    expect(move.stderr).toContain("ESTALE");
+    expect(new TextDecoder().decode((await raw.readFile("/guarded-move-target.txt")).bytes)).toBe(
+      "EXTERNAL",
+    );
+    await expect(raw.stat("/guarded-move-source.txt")).resolves.toBeDefined();
+  }, 30_000);
+
   it("keeps rejected redirected writes off the durable head", async () => {
     const seeded = await shell();
     await seeded.exec("printf ORIGINAL-CONTENT > staged-rejection.txt");
