@@ -106,7 +106,12 @@ export class FakeLoonFsBackend implements LoonFsBackend {
   }
 
   async getCapabilities(): Promise<LoonFsCapabilities> {
-    return { serverGrep: this.serverGrep !== undefined, changeFeed: false, attributes: false };
+    return {
+      serverGrep: this.serverGrep !== undefined,
+      changeFeed: false,
+      attributes: false,
+      writeGuards: true,
+    };
   }
 
   async grepNamespace(query: GrepQuery): Promise<GrepPage> {
@@ -200,7 +205,12 @@ export class FakeLoonFsBackend implements LoonFsBackend {
   async writeFile(
     path: string,
     bytes: Uint8Array,
-    options: { behavior: WriteBehavior; expectedRevisionNo?: number; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      expectedInodeId?: string;
+      expectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
     return this.mutate(
       options.commit,
@@ -208,6 +218,7 @@ export class FakeLoonFsBackend implements LoonFsBackend {
         kind: "write_file",
         path,
         behavior: options.behavior,
+        expectedInodeId: options.expectedInodeId,
         expectedRevisionNo: options.expectedRevisionNo,
         sizeBytes: bytes.byteLength,
         sha256: createHash("sha256").update(bytes).digest("hex"),
@@ -215,17 +226,34 @@ export class FakeLoonFsBackend implements LoonFsBackend {
       () => {
         const { directory, name } = this.parentOf(path);
         const existing = directory.children.get(name);
-        if (existing?.kind === "directory") {
-          throw new LoonFsBackendError("is_a_directory", `${path} is a directory`);
+        const hasGuard =
+          options.expectedInodeId !== undefined || options.expectedRevisionNo !== undefined;
+        if (options.behavior === "no-replace" && hasGuard) {
+          throw new LoonFsBackendError(
+            "internal",
+            "write guards contradict no-replace behavior",
+          );
         }
         if (options.behavior === "no-replace" && existing) {
           throw new LoonFsBackendError("destination_exists", `${path} already exists`);
         }
+        if (existing === undefined && hasGuard) {
+          throw new LoonFsBackendError("not_found", `${path} does not exist`);
+        }
+        if (options.expectedInodeId !== undefined && existing?.inodeId !== options.expectedInodeId) {
+          throw new LoonFsBackendError(
+            "raced_binding",
+            "the path was rebound after it was read",
+          );
+        }
         if (
           options.expectedRevisionNo !== undefined &&
-          existing?.revisionNo !== options.expectedRevisionNo
+          (existing?.kind !== "file" || existing.revisionNo !== options.expectedRevisionNo)
         ) {
           throw new LoonFsBackendError("stale_revision", `${path} changed after it was read`);
+        }
+        if (existing?.kind === "directory") {
+          throw new LoonFsBackendError("is_a_directory", `${path} is a directory`);
         }
         const written: FakeFile = {
           kind: "file",
@@ -323,11 +351,23 @@ export class FakeLoonFsBackend implements LoonFsBackend {
   async movePath(
     fromPath: string,
     toPath: string,
-    options: { behavior: WriteBehavior; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      destinationExpectedInodeId?: string;
+      destinationExpectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
     return this.mutate(
       options.commit,
-      { kind: "move_path", fromPath, toPath, behavior: options.behavior },
+      {
+        kind: "move_path",
+        fromPath,
+        toPath,
+        behavior: options.behavior,
+        destinationExpectedInodeId: options.destinationExpectedInodeId,
+        destinationExpectedRevisionNo: options.destinationExpectedRevisionNo,
+      },
       () => {
         const from = this.parentOf(fromPath);
         const node = from.directory.children.get(from.name);
@@ -338,7 +378,11 @@ export class FakeLoonFsBackend implements LoonFsBackend {
           throw new LoonFsBackendError("invalid_path", `${toPath} is inside ${fromPath}`);
         }
         const to = this.parentOf(toPath);
-        this.claimDestination(to.directory, to.name, toPath, options.behavior);
+        this.claimDestination(to.directory, to.name, toPath, {
+          behavior: options.behavior,
+          expectedInodeId: options.destinationExpectedInodeId,
+          expectedRevisionNo: options.destinationExpectedRevisionNo,
+        });
         from.directory.children.delete(from.name);
         node.name = to.name;
         to.directory.children.set(to.name, node);
@@ -350,18 +394,34 @@ export class FakeLoonFsBackend implements LoonFsBackend {
   async copyFile(
     fromPath: string,
     toPath: string,
-    options: { behavior: WriteBehavior; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      destinationExpectedInodeId?: string;
+      destinationExpectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
     return this.mutate(
       options.commit,
-      { kind: "copy_file", fromPath, toPath, behavior: options.behavior },
+      {
+        kind: "copy_file",
+        fromPath,
+        toPath,
+        behavior: options.behavior,
+        destinationExpectedInodeId: options.destinationExpectedInodeId,
+        destinationExpectedRevisionNo: options.destinationExpectedRevisionNo,
+      },
       () => {
         const source = this.resolve(fromPath);
         if (source.kind !== "file") {
           throw new LoonFsBackendError("is_a_directory", `${fromPath} is a directory`);
         }
         const to = this.parentOf(toPath);
-        const displaced = this.claimDestination(to.directory, to.name, toPath, options.behavior);
+        const displaced = this.claimDestination(to.directory, to.name, toPath, {
+          behavior: options.behavior,
+          expectedInodeId: options.destinationExpectedInodeId,
+          expectedRevisionNo: options.destinationExpectedRevisionNo,
+        });
         const copied: FakeFile = {
           kind: "file",
           name: to.name,
@@ -412,13 +472,36 @@ export class FakeLoonFsBackend implements LoonFsBackend {
     directory: FakeDirectory,
     name: string,
     path: string,
-    behavior: WriteBehavior,
+    options: {
+      behavior: WriteBehavior;
+      expectedInodeId: string | undefined;
+      expectedRevisionNo: number | undefined;
+    },
   ): FakeNode | undefined {
     const occupant = directory.children.get(name);
+    const hasGuard = options.expectedInodeId !== undefined || options.expectedRevisionNo !== undefined;
+    if (options.behavior === "no-replace" && hasGuard) {
+      throw new LoonFsBackendError(
+        "internal",
+        "destination guards contradict no-replace behavior",
+      );
+    }
     if (occupant === undefined) {
+      if (hasGuard) {
+        throw new LoonFsBackendError("not_found", `${path} does not exist`);
+      }
       return undefined;
     }
-    if (behavior === "no-replace") {
+    if (options.expectedInodeId !== undefined && occupant.inodeId !== options.expectedInodeId) {
+      throw new LoonFsBackendError("raced_binding", `${path} was rebound after it was read`);
+    }
+    if (
+      options.expectedRevisionNo !== undefined &&
+      (occupant.kind !== "file" || occupant.revisionNo !== options.expectedRevisionNo)
+    ) {
+      throw new LoonFsBackendError("stale_revision", `${path} changed after it was read`);
+    }
+    if (options.behavior === "no-replace") {
       throw new LoonFsBackendError("destination_exists", `${path} already exists`);
     }
     if (occupant.kind === "directory") {

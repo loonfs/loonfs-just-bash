@@ -397,12 +397,15 @@ export class LoonFsFileSystem implements IFileSystem {
     const destinationPath = this.namespacePath(dest, "rename");
     await this.materializeHeldWrite(sourcePath);
     context.clearHeldWrite(destinationPath);
+    const destination = await this.optionalEntry(destinationPath, "rename", dest);
+    const commit = context.mintCommit(src);
     await this.request(
       () =>
-        this.backend.movePath(sourcePath, destinationPath, {
-          behavior: "replace",
-          commit: context.mintCommit(src),
-        }),
+        this.backend.movePath(
+          sourcePath,
+          destinationPath,
+          guardedDestinationOptions(destination, commit),
+        ),
       "rename",
       src,
     );
@@ -550,9 +553,14 @@ export class LoonFsFileSystem implements IFileSystem {
         this.backend.writeFile(
           namespacePath,
           bytes,
-          revisionNo === undefined
+          existing === undefined
             ? { behavior: "no-replace" as WriteBehavior, commit }
-            : { behavior: "replace" as WriteBehavior, expectedRevisionNo: revisionNo, commit },
+            : {
+                behavior: "replace" as WriteBehavior,
+                expectedInodeId: existing.inodeId,
+                ...(revisionNo !== undefined ? { expectedRevisionNo: revisionNo } : {}),
+                commit,
+              },
         ),
       syscall,
       path,
@@ -567,12 +575,15 @@ export class LoonFsFileSystem implements IFileSystem {
     src: string,
     dest: string,
   ): Promise<void> {
+    const destination = await this.optionalEntry(destinationPath, "cp", dest);
+    const commit = context.mintCommit(dest);
     await this.request(
       () =>
-        this.backend.copyFile(sourcePath, destinationPath, {
-          behavior: "replace",
-          commit: context.mintCommit(dest),
-        }),
+        this.backend.copyFile(
+          sourcePath,
+          destinationPath,
+          guardedDestinationOptions(destination, commit),
+        ),
       "cp",
       src,
     );
@@ -706,6 +717,26 @@ export class LoonFsFileSystem implements IFileSystem {
     this.namespaceId ??= this.backend.getNamespace().then((info) => info.namespaceId);
     return this.namespaceId;
   }
+}
+
+function guardedDestinationOptions(
+  destination: LoonFsEntry | undefined,
+  commit: Parameters<LoonFsBackend["movePath"]>[2]["commit"],
+): Parameters<LoonFsBackend["movePath"]>[2] {
+  if (destination === undefined) {
+    return { behavior: "no-replace", commit };
+  }
+  if (destination.kind === "directory") {
+    return { behavior: "replace", commit };
+  }
+  return {
+    behavior: "replace",
+    destinationExpectedInodeId: destination.inodeId,
+    ...(destination.file?.revisionNo !== undefined
+      ? { destinationExpectedRevisionNo: destination.file.revisionNo }
+      : {}),
+    commit,
+  };
 }
 
 function encodeContent(content: FileContent, options?: WriteFileOptions | TextEncodingName): Uint8Array {

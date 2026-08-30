@@ -41,6 +41,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
       serverGrep: features["query.grep"] === true,
       changeFeed: features["core.changes"] === true,
       attributes: features["core.attributes"] === true,
+      writeGuards: features["core.write_guards"] === true,
     };
   }
 
@@ -93,22 +94,32 @@ export class HttpLoonFsBackend implements LoonFsBackend {
   async writeFile(
     path: string,
     bytes: Uint8Array,
-    options: { behavior: WriteBehavior; expectedRevisionNo?: number; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      expectedInodeId?: string;
+      expectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
     try {
-      const response = await this.retried(() =>
-        putFile(this.client, {
-          namespace_id: this.namespaceId,
-          path,
-          bytes,
-          actor: options.commit.actor,
-          commit_id: options.commit.commitId,
-          message: options.commit.message ?? null,
-          behavior: options.behavior === "replace" ? "replace" : "no_replace",
-          ...(options.expectedRevisionNo !== undefined
-            ? { expected_revision_no: options.expectedRevisionNo }
-            : {}),
-        }),
+      const response = await withIdentityGuard(options.expectedInodeId, () =>
+        this.retried(() =>
+          putFile(this.client, {
+            namespace_id: this.namespaceId,
+            path,
+            bytes,
+            actor: options.commit.actor,
+            commit_id: options.commit.commitId,
+            message: options.commit.message ?? null,
+            behavior: options.behavior === "replace" ? "replace" : "no_replace",
+            ...(options.expectedInodeId !== undefined
+              ? { expected_inode_id: options.expectedInodeId }
+              : {}),
+            ...(options.expectedRevisionNo !== undefined
+              ? { expected_revision_no: options.expectedRevisionNo }
+              : {}),
+          }),
+        ),
       );
       return { headSeq: Number(response.committed_seq) };
     } catch (error) {
@@ -149,27 +160,53 @@ export class HttpLoonFsBackend implements LoonFsBackend {
   async movePath(
     fromPath: string,
     toPath: string,
-    options: { behavior: WriteBehavior; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      destinationExpectedInodeId?: string;
+      destinationExpectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
-    return this.commitOne(options.commit, {
-      kind: "move_path",
-      from_path: fromPath,
-      to_path: toPath,
-      behavior: options.behavior === "replace" ? "replace" : "no_replace",
-    });
+    return withIdentityGuard(options.destinationExpectedInodeId, () =>
+      this.commitOne(options.commit, {
+        kind: "move_path",
+        from_path: fromPath,
+        to_path: toPath,
+        behavior: options.behavior === "replace" ? "replace" : "no_replace",
+        ...(options.destinationExpectedInodeId !== undefined
+          ? { destination_expected_inode_id: options.destinationExpectedInodeId }
+          : {}),
+        ...(options.destinationExpectedRevisionNo !== undefined
+          ? { destination_expected_revision_no: options.destinationExpectedRevisionNo }
+          : {}),
+      }),
+    );
   }
 
   async copyFile(
     fromPath: string,
     toPath: string,
-    options: { behavior: WriteBehavior; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      destinationExpectedInodeId?: string;
+      destinationExpectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
-    return this.commitOne(options.commit, {
-      kind: "copy_path",
-      from_path: fromPath,
-      to_path: toPath,
-      behavior: options.behavior === "replace" ? "replace" : "no_replace",
-    });
+    return withIdentityGuard(options.destinationExpectedInodeId, () =>
+      this.commitOne(options.commit, {
+        kind: "copy_path",
+        from_path: fromPath,
+        to_path: toPath,
+        behavior: options.behavior === "replace" ? "replace" : "no_replace",
+        ...(options.destinationExpectedInodeId !== undefined
+          ? { destination_expected_inode_id: options.destinationExpectedInodeId }
+          : {}),
+        ...(options.destinationExpectedRevisionNo !== undefined
+          ? { destination_expected_revision_no: options.destinationExpectedRevisionNo }
+          : {}),
+      }),
+    );
   }
 
   async grepNamespace(query: GrepQuery): Promise<GrepPage> {
@@ -256,6 +293,25 @@ function mapEntry(entry: LoonFS.PathEntry, path: string): LoonFsEntry {
     };
   }
   return { ...base, kind: "directory" };
+}
+
+async function withIdentityGuard<T>(
+  expectedInodeId: string | undefined,
+  call: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    // The wire reports an inode-guard mismatch as path_conflict.
+    if (
+      expectedInodeId !== undefined &&
+      error instanceof LoonFsBackendError &&
+      error.code === "destination_exists"
+    ) {
+      throw new LoonFsBackendError("raced_binding", error.message, error.requestId);
+    }
+    throw error;
+  }
 }
 
 const CODE_CONDITIONS: Record<string, LoonFsBackendError["code"]> = {

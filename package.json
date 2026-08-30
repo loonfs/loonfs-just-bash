@@ -39,10 +39,10 @@
     "just-bash": "3.4.2"
   },
   "peerDependencies": {
-    "@loonfs/sdk": "^0.1.1"
+    "@loonfs/sdk": "^0.1.3"
   },
   "devDependencies": {
-    "@loonfs/sdk": "^0.1.1",
+    "@loonfs/sdk": "^0.1.3",
     "@types/node": "^26.4.0",
     "eslint": "^9.34.0",
     "typescript": "^5.9.2",

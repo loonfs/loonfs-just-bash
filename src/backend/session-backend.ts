@@ -56,7 +56,12 @@ export class SessionBackend implements LoonFsBackend {
   async writeFile(
     path: string,
     bytes: Uint8Array,
-    options: { behavior: WriteBehavior; expectedRevisionNo?: number; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      expectedInodeId?: string;
+      expectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
     return this.mutating(() => this.inner.writeFile(path, bytes, options));
   }
@@ -78,7 +83,12 @@ export class SessionBackend implements LoonFsBackend {
   async movePath(
     fromPath: string,
     toPath: string,
-    options: { behavior: WriteBehavior; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      destinationExpectedInodeId?: string;
+      destinationExpectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
     return this.mutating(() => this.inner.movePath(fromPath, toPath, options));
   }
@@ -86,7 +96,12 @@ export class SessionBackend implements LoonFsBackend {
   async copyFile(
     fromPath: string,
     toPath: string,
-    options: { behavior: WriteBehavior; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      destinationExpectedInodeId?: string;
+      destinationExpectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt> {
     return this.mutating(() => this.inner.copyFile(fromPath, toPath, options));
   }

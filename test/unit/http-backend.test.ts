@@ -19,6 +19,31 @@ function backendWith(overrides: Record<string, unknown>): HttpLoonFsBackend {
   return new HttpLoonFsBackend({ client, namespaceId: "ns_test" });
 }
 
+function backendForPut(
+  createCommit: (request: { operations: Array<Record<string, unknown>> }) => Promise<unknown>,
+): HttpLoonFsBackend {
+  return backendWith({
+    system: {
+      getCapabilities: async () => ({ features: {}, limits: {} }),
+    },
+    uploads: {
+      createUpload: async () => ({ mode: "service_proxied", upload_id: "up_1" }),
+      putUploadContent: async () => undefined,
+      completeUpload: async () => ({
+        status: "completed",
+        upload_id: "up_1",
+        content_ref: {
+          size_bytes: 1,
+          checksum: { algorithm: "sha256", value: "00" },
+        },
+        content_token: "token_1",
+      }),
+      abortUpload: async () => undefined,
+    },
+    filesystem: { createCommit },
+  });
+}
+
 async function condition(run: Promise<unknown>): Promise<string> {
   try {
     await run;
@@ -42,6 +67,7 @@ describe("HttpLoonFsBackend", () => {
             "query.grep": false,
             "core.changes": true,
             "core.attributes": false,
+            "core.write_guards": true,
           },
         }),
       },
@@ -50,7 +76,90 @@ describe("HttpLoonFsBackend", () => {
       serverGrep: false,
       changeFeed: true,
       attributes: false,
+      writeGuards: true,
     });
+  });
+
+  it("threads identity guards into file, move, and copy operations", async () => {
+    const operations: Array<Record<string, unknown>> = [];
+    const createCommit = async (request: { operations: Array<Record<string, unknown>> }) => {
+      operations.push(request.operations[0]!);
+      return { committed_seq: 7 };
+    };
+    const backend = backendForPut(createCommit);
+    await backend.writeFile("/target.txt", new Uint8Array([1]), {
+      behavior: "replace",
+      expectedInodeId: "ino_target",
+      expectedRevisionNo: 4,
+      commit,
+    });
+    await backend.movePath("/source.txt", "/target.txt", {
+      behavior: "replace",
+      destinationExpectedInodeId: "ino_target",
+      destinationExpectedRevisionNo: 5,
+      commit,
+    });
+    await backend.copyFile("/source.txt", "/target.txt", {
+      behavior: "replace",
+      destinationExpectedInodeId: "ino_target",
+      destinationExpectedRevisionNo: 6,
+      commit,
+    });
+    expect(operations[0]).toMatchObject({
+      kind: "put_file",
+      expected_inode_id: "ino_target",
+      expected_revision_no: 4,
+    });
+    expect(operations[1]).toMatchObject({
+      kind: "move_path",
+      destination_expected_inode_id: "ino_target",
+      destination_expected_revision_no: 5,
+    });
+    expect(operations[2]).toMatchObject({
+      kind: "copy_path",
+      destination_expected_inode_id: "ino_target",
+      destination_expected_revision_no: 6,
+    });
+  });
+
+  it("normalizes guarded path conflicts as raced bindings", async () => {
+    const pathConflict = () =>
+      new LoonFSError({
+        message: "conflict",
+        statusCode: 409,
+        body: { code: "path_conflict", message: "the target changed", request_id: "req_guard" },
+      });
+    const writeBackend = backendForPut(async () => {
+      throw pathConflict();
+    });
+    const writeError = await writeBackend
+      .writeFile("/target.txt", new Uint8Array([1]), {
+        behavior: "replace",
+        expectedInodeId: "ino_target",
+        commit,
+      })
+      .catch((error: LoonFsBackendError) => error);
+    expect(writeError.code).toBe("raced_binding");
+    expect(writeError.message).toBe("the target changed");
+    expect(writeError.requestId).toBe("req_guard");
+
+    const destinationBackend = backendWith({
+      filesystem: {
+        createCommit: async () => {
+          throw pathConflict();
+        },
+      },
+    });
+    for (const method of ["movePath", "copyFile"] as const) {
+      const error = await destinationBackend[method]("/source.txt", "/target.txt", {
+        behavior: "replace",
+        destinationExpectedInodeId: "ino_target",
+        commit,
+      }).catch((caught: LoonFsBackendError) => caught);
+      expect(error.code, method).toBe("raced_binding");
+      expect(error.message, method).toBe("the target changed");
+      expect(error.requestId, method).toBe("req_guard");
+    }
   });
 
   it("retries a lost commit outcome once with the same commit identity", async () => {

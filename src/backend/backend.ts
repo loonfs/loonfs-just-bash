@@ -21,6 +21,7 @@ export interface LoonFsCapabilities {
   serverGrep: boolean;
   changeFeed: boolean;
   attributes: boolean;
+  writeGuards: boolean;
 }
 
 export interface LoonFsNamespaceInfo {
@@ -116,7 +117,12 @@ export interface LoonFsBackend {
   writeFile(
     path: string,
     bytes: Uint8Array,
-    options: { behavior: WriteBehavior; expectedRevisionNo?: number; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      expectedInodeId?: string;
+      expectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt>;
   createDirectory(
     path: string,
@@ -129,12 +135,22 @@ export interface LoonFsBackend {
   movePath(
     fromPath: string,
     toPath: string,
-    options: { behavior: WriteBehavior; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      destinationExpectedInodeId?: string;
+      destinationExpectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt>;
   copyFile(
     fromPath: string,
     toPath: string,
-    options: { behavior: WriteBehavior; commit: MutationCommit },
+    options: {
+      behavior: WriteBehavior;
+      destinationExpectedInodeId?: string;
+      destinationExpectedRevisionNo?: number;
+      commit: MutationCommit;
+    },
   ): Promise<MutationReceipt>;
   updateAttributes?(
     path: string,
