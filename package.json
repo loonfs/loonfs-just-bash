@@ -42,7 +42,7 @@
     "@loonfs/sdk": "^0.1.3"
   },
   "devDependencies": {
-    "@loonfs/sdk": "^0.1.3",
+    "@loonfs/sdk": "git+https://github.com/loonfs/loonfs-sdk-typescript.git#a1138e88588b7adfded5ddaa7aa513284cfb0fde",
     "@types/node": "^26.4.0",
     "eslint": "^9.34.0",
     "typescript": "^5.9.2",
