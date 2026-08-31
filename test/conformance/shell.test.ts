@@ -72,6 +72,119 @@ describe("LoonFsWorkspaceShell", () => {
     expect(lost.exitCode).not.toBe(0);
   });
 
+  it("makes HOME durable and refuses writes outside the workspace and /tmp", async () => {
+    const backend = seededBackend();
+    const first = await shell(backend);
+    expect((await first.exec("printf '%s' \"$HOME\"")).stdout).toBe("/workspace");
+    expect((await first.exec("echo home > ~/home.txt")).exitCode).toBe(0);
+    expect((await first.exec("echo scratch > /tmp/scratch.txt")).exitCode).toBe(0);
+    const outside = await first.exec("echo hidden > /outside.txt");
+    expect(outside.exitCode).not.toBe(0);
+    expect(outside.stderr).toContain("only /tmp and /workspace are writable");
+    expect((await first.exec("printf discarded > /dev/null")).exitCode).toBe(0);
+    await first.close();
+
+    const second = await shell(backend);
+    expect((await second.exec("cat ~/home.txt")).stdout).toBe("home\n");
+    expect((await second.exec("test ! -e /tmp/scratch.txt")).exitCode).toBe(0);
+    expect((await second.exec("test ! -e /outside.txt")).exitCode).toBe(0);
+  });
+
+  it("forwards just-bash exec options and returns the resulting environment", async () => {
+    const ws = await shell(seededBackend());
+    expect((await ws.exec("cat", { stdin: "from stdin" })).stdout).toBe("from stdin");
+
+    const environment = await ws.exec("printf '%s' \"$CUSTOM_VALUE\"", {
+      env: { CUSTOM_VALUE: "visible" },
+    });
+    expect(environment.stdout).toBe("visible");
+    expect(environment.env?.CUSTOM_VALUE).toBe("visible");
+
+    const replacedEnvironment = await ws.exec("printf '%s' \"$ONLY_VALUE\"", {
+      env: { ONLY_VALUE: "replacement" },
+      replaceEnv: true,
+    });
+    expect(replacedEnvironment.stdout).toBe("replacement");
+    expect(replacedEnvironment.env?.ONLY_VALUE).toBe("replacement");
+    expect(replacedEnvironment.env?.PATH).toBeUndefined();
+
+    expect((await ws.exec("pwd", { cwd: "/tmp" })).stdout).toBe("/tmp\n");
+    expect((await ws.exec("printf '%s|%s'", { args: ["first", "second"] })).stdout).toBe(
+      "first|second",
+    );
+    expect(
+      (
+        await ws.exec("cat <<'EOF'\n  leading spaces\nEOF\n", {
+          rawScript: true,
+        })
+      ).stdout,
+    ).toBe("  leading spaces\n");
+  });
+
+  it("honors pre-aborted executions without publishing a staged write", async () => {
+    const backend = seededBackend();
+    const ws = await shell(backend);
+    const controller = new AbortController();
+    controller.abort();
+    const result = await ws.exec("echo never > aborted.txt", { signal: controller.signal });
+    expect(result.exitCode).toBe(124);
+    expect((await ws.exec("test ! -e aborted.txt")).exitCode).toBe(0);
+  });
+
+  it("rejects unknown exec options instead of silently dropping them", async () => {
+    const ws = await shell(seededBackend());
+    await expect(
+      ws.exec("pwd", { typoedOption: true } as never),
+    ).rejects.toThrow(/unknown workspace exec option: typoedOption/);
+  });
+
+  it("provides durable, workspace-confined file helpers", async () => {
+    const backend = seededBackend();
+    const ws = await shell(backend);
+    await ws.writeFiles([
+      { path: "uploads/one.txt", content: "one" },
+      { path: "/workspace/uploads/two.bin", content: new Uint8Array([116, 119, 111]) },
+      { path: "uploads/empty.txt", content: "" },
+    ]);
+    expect(await ws.readFile("uploads/one.txt")).toBe("one");
+    expect(await ws.readFile("/workspace/uploads/two.bin")).toBe("two");
+    expect(await ws.readFile("uploads/empty.txt")).toBe("");
+    await expect(ws.writeFiles([{ path: "../tmp/escape.txt", content: "x" }])).rejects.toThrow(
+      /confined to \/workspace/,
+    );
+  });
+
+  it("enforces read and write byte limits across the entire execution", async () => {
+    const backend = seededBackend();
+    backend.seedFile("/read-a.txt", "123456");
+    backend.seedFile("/read-b.txt", "abcdef");
+    const ws = await createLoonFsWorkspaceShell({
+      backend,
+      actor,
+      access: "read-write",
+      limits: { maxReadBytes: 10, maxWriteBytes: 10 },
+    });
+
+    const read = await ws.exec("cat read-a.txt read-b.txt");
+    expect(read.exitCode).not.toBe(0);
+    expect(read.stderr).toContain("10-byte aggregate read budget");
+    expect(read.bytesRead).toBe(6);
+
+    const write = await ws.exec("printf 123456 > write-a.txt; printf abcdef > write-b.txt");
+    expect(write.exitCode).not.toBe(0);
+    expect(write.stderr).toContain("10-byte aggregate write budget");
+    expect(write.bytesWritten).toBe(6);
+    expect((await ws.exec("cat write-a.txt")).stdout).toBe("123456");
+    expect((await ws.exec("test ! -e write-b.txt")).exitCode).toBe(0);
+
+    const copied = await ws.exec("cp read-a.txt copy-a.txt; cp read-b.txt copy-b.txt");
+    expect(copied.exitCode).not.toBe(0);
+    expect(copied.stderr).toContain("10-byte aggregate write budget");
+    expect(copied.bytesWritten).toBe(6);
+    expect((await ws.exec("cat copy-a.txt")).stdout).toBe("123456");
+    expect((await ws.exec("test ! -e copy-b.txt")).exitCode).toBe(0);
+  });
+
   it("registers only the curated command surface", async () => {
     const backend = seededBackend();
     const ws = await shell(backend);
@@ -181,5 +294,17 @@ describe("LoonFsWorkspaceShell", () => {
         mountPoint: "/",
       }),
     ).rejects.toThrow(/mountPoint must name a directory below/);
+  });
+
+  it("rejects mounts that overlap reserved scratch and device paths", async () => {
+    for (const mountPoint of ["/tmp", "/tmp/workspace", "/dev", "/dev/workspace"]) {
+      await expect(
+        createLoonFsWorkspaceShell({
+          backend: seededBackend(),
+          actor,
+          mountPoint,
+        }),
+      ).rejects.toThrow(/cannot overlap the reserved \/tmp or \/dev trees/);
+    }
   });
 });

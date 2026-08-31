@@ -61,7 +61,10 @@ conflict instead of silently replacing their work.
 ## How the workspace behaves
 
 - `/workspace` contains the LoonFS namespace. Changes there are durable.
-- `/tmp` is private scratch space. It disappears with the shell.
+- `$HOME` points at `/workspace`, so `~/file.txt` is durable too.
+- `/tmp` is the only writable scratch space. It disappears with the shell;
+  writes elsewhere in the virtual root are refused instead of being silently
+  lost when the shell closes.
 - Pipes, redirects, variables, conditionals, loops, and `cd` work normally.
 - Redirected output becomes one durable revision when the command finishes. A
   script that exits nonzero keeps every pre-existing file at its previous
@@ -73,7 +76,47 @@ conflict instead of silently replacing their work.
 - Recursive `grep` uses LoonFS search when the server offers it. Other searches
   run inside the shell.
 - Every execution has limits on runtime, output, reads, writes, directory
-  listings, and LoonFS requests. You can override them with the `limits` option.
+  listings, and LoonFS requests. Read and write byte limits apply to the total
+  execution as well as each individual file. You can override them with the
+  `limits` option.
+
+`exec()` accepts the same per-call `env`, `replaceEnv`, `cwd`, `rawScript`,
+`stdin`, `stdinKind`, `signal`, and `args` options as `just-bash`, plus LoonFS
+`message` and `toolCallId` metadata. Unknown option names reject the call so a
+misspelling cannot silently weaken the intended execution setup.
+
+## Use with Vercel bash-tool
+
+Use the provided structural adapter when an AI SDK integration expects
+Vercel's `bash-tool` `Sandbox` interface. Passing the workspace shell itself
+does not work because it intentionally is not a raw `just-bash` `Bash` object.
+Install `bash-tool` in the consuming application (`npm install bash-tool`);
+the adapter is integration-tested against version 1.3.19.
+
+```ts
+import { createBashTool } from "bash-tool";
+import {
+  createBashToolSandbox,
+  createLoonFsWorkspaceShell,
+} from "@loonfs/just-bash";
+
+const shell = await createLoonFsWorkspaceShell({
+  client,
+  namespaceId: "ns_customer_123",
+  actor: { kind: "service", id: "agent_42" },
+  access: "read-write",
+});
+const { mountPoint } = await shell.info();
+const { tools } = await createBashTool({
+  sandbox: createBashToolSandbox(shell),
+  destination: mountPoint,
+  files: { "matter/README.md": "Matter workspace" },
+});
+```
+
+The adapter's `readFile` and `writeFiles` methods are confined to the durable
+workspace mount. Commands can still use `/tmp` for bounded scratch work. Close
+the underlying `shell` when the agent session ends.
 
 ## Available commands
 
@@ -110,6 +153,9 @@ npm run lint
 npm run typecheck
 npm test
 ```
+
+Before publishing, `npm run release:check` verifies that required peer versions
+exist on npm and installs the packed tarball in a clean temporary consumer.
 
 Run `npm run example` for a runnable example. It builds first and then runs
 [`examples/design-partner.mjs`](examples/design-partner.mjs). The integration
