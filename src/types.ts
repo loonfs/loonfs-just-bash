@@ -1,4 +1,5 @@
 import type { LoonFSClient } from "@loonfs/sdk/server";
+import type { ExecOptions as JustBashExecOptions, FileContent } from "just-bash";
 import type { LoonFsBackend } from "./backend/backend.js";
 
 export interface LoonFsActor {
@@ -36,8 +37,17 @@ export interface CreateWorkspaceShellOptions {
   onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void | Promise<void>;
 }
 
-export interface WorkspaceExecOptions {
+export interface WorkspaceExecOptions extends JustBashExecOptions {
   toolCallId?: string;
+  message?: string;
+}
+
+export interface WorkspaceFileInput {
+  path: string;
+  content: FileContent;
+}
+
+export interface WorkspaceFileWriteOptions {
   message?: string;
 }
 
@@ -54,6 +64,8 @@ export interface WorkspaceExecResult {
   bytesRead?: number;
   bytesWritten?: number;
   searchModes?: SearchMode[];
+  /** Final virtual environment, matching just-bash's exec result. */
+  env?: Record<string, string>;
 }
 
 export interface WorkspaceExecutionSummary {
@@ -81,6 +93,10 @@ export interface WorkspaceInfo {
 
 export interface LoonFsWorkspaceShell {
   exec(script: string, options?: WorkspaceExecOptions): Promise<WorkspaceExecResult>;
+  /** Reads a durable file relative to, or absolutely beneath, the workspace mount. */
+  readFile(path: string): Promise<string>;
+  /** Writes durable files relative to, or absolutely beneath, the workspace mount. */
+  writeFiles(files: WorkspaceFileInput[], options?: WorkspaceFileWriteOptions): Promise<void>;
   refresh(): Promise<void>;
   info(): Promise<WorkspaceInfo>;
   close(): Promise<void>;

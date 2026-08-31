@@ -17,6 +17,8 @@ export interface MutationContextOptions {
   message?: string;
   maxMutationsPerExec?: number;
   maxLoonFsRequestsPerExec?: number;
+  maxReadBytesPerExec?: number;
+  maxWriteBytesPerExec?: number;
 }
 
 export interface HeldWrite {
@@ -44,6 +46,8 @@ export class MutationContext {
   readonly message: string;
   private readonly maxMutations: number;
   private readonly maxRequests: number;
+  private readonly maxReadBytes: number;
+  private readonly maxWriteBytes: number;
   private readonly executions = new AsyncLocalStorage<ExecutionState>();
   private fallbackState = emptyState();
   private lastState = this.fallbackState;
@@ -54,6 +58,8 @@ export class MutationContext {
     this.maxMutations = options.maxMutationsPerExec ?? DEFAULT_WORKSPACE_LIMITS.maxMutationsPerExec;
     this.maxRequests =
       options.maxLoonFsRequestsPerExec ?? DEFAULT_WORKSPACE_LIMITS.maxLoonFsRequestsPerExec;
+    this.maxReadBytes = options.maxReadBytesPerExec ?? DEFAULT_WORKSPACE_LIMITS.maxReadBytes;
+    this.maxWriteBytes = options.maxWriteBytesPerExec ?? DEFAULT_WORKSPACE_LIMITS.maxWriteBytes;
   }
 
   /** Mints the commit identity one semantic mutation keeps across retries. */
@@ -166,12 +172,39 @@ export class MutationContext {
     return [...this.state().readFailures];
   }
 
-  countRead(bytes: number): void {
-    this.state().counters.bytesRead += bytes;
+  reserveRead(bytes: number, syscall: string, path: string): void {
+    this.consumeBytes("bytesRead", bytes, this.maxReadBytes, "read", syscall, path);
   }
 
+  settleRead(reservedBytes: number, actualBytes: number, syscall: string, path: string): void {
+    const difference = actualBytes - reservedBytes;
+    if (difference > 0) {
+      this.consumeBytes("bytesRead", difference, this.maxReadBytes, "read", syscall, path);
+    } else if (difference < 0) {
+      this.state().counters.bytesRead += difference;
+    }
+  }
+
+  releaseRead(bytes: number): void {
+    this.state().counters.bytesRead = Math.max(0, this.state().counters.bytesRead - bytes);
+  }
+
+  /** @deprecated Filesystem adapters should reserve before starting the read. */
+  countRead(bytes: number): void {
+    this.reserveRead(bytes, "read", "/");
+  }
+
+  reserveWrite(bytes: number, syscall: string, path: string): void {
+    this.consumeBytes("bytesWritten", bytes, this.maxWriteBytes, "write", syscall, path);
+  }
+
+  releaseWrite(bytes: number): void {
+    this.state().counters.bytesWritten = Math.max(0, this.state().counters.bytesWritten - bytes);
+  }
+
+  /** @deprecated Filesystem adapters should reserve before starting the write. */
   countWritten(bytes: number): void {
-    this.state().counters.bytesWritten += bytes;
+    this.reserveWrite(bytes, "write", "/");
   }
 
   snapshot(): WorkspaceCounters {
@@ -215,6 +248,32 @@ export class MutationContext {
 
   private state(): ExecutionState {
     return this.executions.getStore() ?? this.lastState;
+  }
+
+  private consumeBytes(
+    counter: "bytesRead" | "bytesWritten",
+    bytes: number,
+    limit: number,
+    kind: "read" | "write",
+    syscall: string,
+    path: string,
+  ): void {
+    if (!Number.isSafeInteger(bytes) || bytes < 0) {
+      throw fsError("EIO", "invalid byte count from the filesystem backend", syscall, path);
+    }
+    const state = this.state();
+    const next = state.counters[counter] + bytes;
+    if (next > limit) {
+      const error = fsError(
+        "EFBIG",
+        `this execution exceeded its ${limit}-byte aggregate ${kind} budget`,
+        syscall,
+        path,
+      );
+      this.noteLimit(error.message);
+      throw error;
+    }
+    state.counters[counter] = next;
   }
 }
 

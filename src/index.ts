@@ -6,6 +6,8 @@ export type {
   WorkspaceExecOptions,
   WorkspaceExecResult,
   WorkspaceExecutionSummary,
+  WorkspaceFileInput,
+  WorkspaceFileWriteOptions,
   WorkspaceInfo,
   WorkspaceLimits,
 } from "./types.js";
@@ -31,6 +33,8 @@ export type { WorkspaceFsError } from "./fs/errors.js";
 export { MutationContext } from "./fs/mutation-context.js";
 export type { MutationContextOptions, WorkspaceCounters } from "./fs/mutation-context.js";
 export { createLoonFsWorkspaceShell } from "./shell/workspace-shell.js";
+export { createBashToolSandbox } from "./integrations/bash-tool.js";
+export type { BashToolSandbox } from "./integrations/bash-tool.js";
 export { WORKSPACE_COMMAND_ALLOWLIST } from "./shell/command-policy.js";
 export type { GrepMatchEntry, GrepPage, GrepQuery } from "./backend/backend.js";
 export type { SearchMode } from "./types.js";

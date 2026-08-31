@@ -117,8 +117,15 @@ export class LoonFsFileSystem implements IFileSystem {
           path,
         );
       }
-      const read = await this.request(() => this.backend.readFile(namespacePath), "read", path);
-      this.context?.countRead(read.bytes.byteLength);
+      this.context?.reserveRead(sizeBytes, "read", path);
+      let read: Awaited<ReturnType<LoonFsBackend["readFile"]>>;
+      try {
+        read = await this.request(() => this.backend.readFile(namespacePath), "read", path);
+      } catch (error) {
+        this.context?.releaseRead(sizeBytes);
+        throw error;
+      }
+      this.context?.settleRead(sizeBytes, read.bytes.byteLength, "read", path);
       if (read.bytes.byteLength > this.maxReadBytes) {
         throw this.limitError(
           "EFBIG",
@@ -324,8 +331,15 @@ export class LoonFsFileSystem implements IFileSystem {
         path,
       );
     }
-    const read = await this.request(() => this.backend.readFile(namespacePath), "append", path);
-    this.context?.countRead(read.bytes.byteLength);
+    this.context?.reserveRead(sizeBytes, "append", path);
+    let read: Awaited<ReturnType<LoonFsBackend["readFile"]>>;
+    try {
+      read = await this.request(() => this.backend.readFile(namespacePath), "append", path);
+    } catch (error) {
+      this.context?.releaseRead(sizeBytes);
+      throw error;
+    }
+    this.context?.settleRead(sizeBytes, read.bytes.byteLength, "append", path);
     if (read.bytes.byteLength > this.maxAppendSourceBytes) {
       throw this.limitError(
         "EFBIG",
@@ -402,7 +416,7 @@ export class LoonFsFileSystem implements IFileSystem {
     context.clearHeldWrite(destinationPath);
     const source = await this.statEntry(sourcePath, "cp", src);
     if (source.kind === "file") {
-      await this.copyOne(context, sourcePath, destinationPath, src, dest);
+      await this.copyOne(context, source, sourcePath, destinationPath, src, dest);
       return;
     }
     if (!options?.recursive) {
@@ -566,47 +580,63 @@ export class LoonFsFileSystem implements IFileSystem {
         path,
       );
     }
-    const revisionNo = existing?.file?.revisionNo;
-    const commit = context.mintCommit(path);
-    await this.request(
-      () =>
-        this.backend.writeFile(
-          namespacePath,
-          bytes,
-          existing === undefined
-            ? { behavior: "no-replace" as WriteBehavior, commit }
-            : {
-                behavior: "replace" as WriteBehavior,
-                expectedInodeId: existing.inodeId,
-                ...(revisionNo !== undefined ? { expectedRevisionNo: revisionNo } : {}),
-                commit,
-              },
-        ),
-      syscall,
-      path,
-    );
-    context.countWritten(bytes.byteLength);
+    context.reserveWrite(bytes.byteLength, syscall, path);
+    try {
+      const revisionNo = existing?.file?.revisionNo;
+      const commit = context.mintCommit(path);
+      await this.request(
+        () =>
+          this.backend.writeFile(
+            namespacePath,
+            bytes,
+            existing === undefined
+              ? { behavior: "no-replace" as WriteBehavior, commit }
+              : {
+                  behavior: "replace" as WriteBehavior,
+                  expectedInodeId: existing.inodeId,
+                  ...(revisionNo !== undefined ? { expectedRevisionNo: revisionNo } : {}),
+                  commit,
+                },
+          ),
+        syscall,
+        path,
+      );
+    } catch (error) {
+      context.releaseWrite(bytes.byteLength);
+      throw error;
+    }
   }
 
   private async copyOne(
     context: MutationContext,
+    source: LoonFsEntry,
     sourcePath: string,
     destinationPath: string,
     src: string,
     dest: string,
   ): Promise<void> {
     const destination = await this.optionalEntry(destinationPath, "cp", dest);
-    const commit = context.mintCommit(dest);
-    await this.request(
-      () =>
-        this.backend.copyFile(
-          sourcePath,
-          destinationPath,
-          guardedDestinationOptions(destination, commit),
-        ),
-      "cp",
-      src,
-    );
+    if (source.file === undefined) {
+      throw fsError("EIO", "the backend omitted file size metadata", "cp", src);
+    }
+    const bytes = source.file.sizeBytes;
+    context.reserveWrite(bytes, "cp", dest);
+    try {
+      const commit = context.mintCommit(dest);
+      await this.request(
+        () =>
+          this.backend.copyFile(
+            sourcePath,
+            destinationPath,
+            guardedDestinationOptions(destination, commit),
+          ),
+        "cp",
+        src,
+      );
+    } catch (error) {
+      context.releaseWrite(bytes);
+      throw error;
+    }
   }
 
   private async copyTree(context: MutationContext, src: string, dest: string): Promise<void> {
@@ -627,6 +657,7 @@ export class LoonFsFileSystem implements IFileSystem {
       } else {
         await this.copyOne(
           context,
+          entry,
           this.namespacePath(childSrc, "cp"),
           this.namespacePath(childDest, "cp"),
           childSrc,

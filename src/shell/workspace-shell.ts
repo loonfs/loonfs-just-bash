@@ -1,13 +1,15 @@
-import { Bash, BashTransformPipeline, InMemoryFs, MountableFs, defineCommand } from "just-bash";
+import { Bash, BashTransformPipeline, InMemoryFs, defineCommand } from "just-bash";
+import type { ExecOptions as BashExecOptions } from "just-bash";
 import type { LoonFsBackend } from "../backend/backend.js";
 import { HttpLoonFsBackend } from "../backend/http-backend.js";
 import { SessionBackend } from "../backend/session-backend.js";
 import { grepRoutingPlugin } from "../commands/grep-routing.js";
 import { loonfsGrepCommand } from "../commands/loonfs-grep.js";
-import { isBackendCondition } from "../fs/errors.js";
+import { fsError, isBackendCondition } from "../fs/errors.js";
 import { LoonFsFileSystem } from "../fs/loonfs-filesystem.js";
 import { MutationContext } from "../fs/mutation-context.js";
-import { normalizeVirtualPath } from "../fs/path.js";
+import { joinVirtualPaths, normalizeVirtualPath } from "../fs/path.js";
+import { WorkspaceMountFileSystem } from "../fs/workspace-mount-filesystem.js";
 import { resolveWorkspaceLimits } from "../limits.js";
 import type {
   CreateWorkspaceShellOptions,
@@ -16,6 +18,8 @@ import type {
   WorkspaceExecOptions,
   WorkspaceExecResult,
   WorkspaceExecutionSummary,
+  WorkspaceFileInput,
+  WorkspaceFileWriteOptions,
   WorkspaceInfo,
   WorkspaceLimits,
 } from "../types.js";
@@ -38,6 +42,9 @@ export async function createLoonFsWorkspaceShell(
   if (mountPoint === "/") {
     throw new Error("mountPoint must name a directory below '/', such as '/workspace'");
   }
+  if (isAtOrBelow(mountPoint, "/tmp") || isAtOrBelow(mountPoint, "/dev")) {
+    throw new Error("mountPoint cannot overlap the reserved /tmp or /dev trees");
+  }
   const raw = resolveBackend(options);
   const namespace = await raw.getNamespace();
   const capabilities = await raw.getCapabilities();
@@ -55,6 +62,8 @@ export async function createLoonFsWorkspaceShell(
     actor: options.actor,
     maxMutationsPerExec: limits.maxMutationsPerExec,
     maxLoonFsRequestsPerExec: limits.maxLoonFsRequestsPerExec,
+    maxReadBytesPerExec: limits.maxReadBytes,
+    maxWriteBytesPerExec: limits.maxWriteBytes,
   });
   const serverGrepOffered = capabilities.serverGrep && raw.grepNamespace !== undefined;
   const backend = new SessionBackend(raw);
@@ -68,11 +77,15 @@ export async function createLoonFsWorkspaceShell(
     maxAppendSourceBytes: limits.maxAppendSourceBytes,
     maxDirectoryEntries: limits.maxDirectoryEntries,
   });
-  const scratchFs = new InMemoryFs();
+  const scratchFs = new InMemoryFs({
+    "/dev/null": "",
+    "/dev/zero": new Uint8Array(0),
+  });
   await scratchFs.mkdir("/tmp");
-  const fs = new MountableFs({
+  const fs = new WorkspaceMountFileSystem({
     base: scratchFs,
-    mounts: [{ mountPoint, filesystem: workspaceFs }],
+    mountPoint,
+    workspace: workspaceFs,
   });
   const workspaceInfo = defineCommand("workspace-info", async () => {
     const head = await backend.getNamespace();
@@ -105,6 +118,7 @@ export async function createLoonFsWorkspaceShell(
   const bash = new Bash({
     fs,
     cwd: mountPoint,
+    env: { HOME: mountPoint },
     commands: WORKSPACE_COMMAND_ALLOWLIST,
     customCommands: [
       workspaceInfo,
@@ -135,7 +149,7 @@ export async function createLoonFsWorkspaceShell(
     // language runtimes; this shell registers none, and the box also breaks
     // any filesystem whose operations perform real network I/O. Containment
     // here is the allowlist, the absent runtimes, and the budgets.
-    defenseInDepth: { enabled: false },
+    defenseInDepth: false,
   });
   const routing = new BashTransformPipeline().use(
     grepRoutingPlugin({ routeToServer: serverGrep, mountPoint }),
@@ -146,6 +160,7 @@ export async function createLoonFsWorkspaceShell(
     access,
     limits,
     workspace: workspaceFs,
+    fs,
     ...(options.onExecutionSummary !== undefined
       ? { onExecutionSummary: options.onExecutionSummary }
       : {}),
@@ -158,6 +173,7 @@ interface WorkspaceIdentity {
   access: WorkspaceAccess;
   limits: WorkspaceLimits;
   workspace: LoonFsFileSystem;
+  fs: WorkspaceMountFileSystem;
   onExecutionSummary?: (summary: WorkspaceExecutionSummary) => void | Promise<void>;
 }
 
@@ -185,16 +201,13 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
   }
 
   exec(script: string, options?: WorkspaceExecOptions): Promise<WorkspaceExecResult> {
-    // Sampled at enqueue: an execution accepted before close() still runs.
-    if (this.closed) {
-      return Promise.reject(new Error("this workspace shell is closed"));
+    let sampledOptions: WorkspaceExecOptions | undefined;
+    try {
+      sampledOptions = sampleExecOptions(options);
+    } catch (error) {
+      return Promise.reject(error);
     }
-    const run = this.queue.then(() => this.runSerialized(script, options));
-    this.queue = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
+    return this.enqueue(() => this.runSerialized(script, sampledOptions));
   }
 
   private async runSerialized(
@@ -213,6 +226,7 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     let stdout = "";
     let stderr = "";
     let exitCode = 0;
+    let env: Record<string, string> | undefined;
     let interpreterFailed = false;
     try {
       // Glob expansion walks live directory listings through the adapter, so
@@ -223,10 +237,11 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       for (let i = 0; i < localSearches; i += 1) {
         this.context.recordSearchMode("bounded_local");
       }
-      const result = await this.bash.exec(transformed.script);
+      const result = await this.bash.exec(transformed.script, toBashExecOptions(options));
       stdout = result.stdout;
       stderr = result.stderr;
       exitCode = result.exitCode;
+      env = { ...result.env };
     } catch (error) {
       interpreterFailed = true;
       stderr = `${error instanceof Error ? error.message : String(error)}\n`;
@@ -321,7 +336,61 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
       bytesRead: counters.bytesRead,
       bytesWritten: counters.bytesWritten,
       ...(searchModes.length > 0 ? { searchModes } : {}),
+      ...(env !== undefined ? { env } : {}),
     };
+  }
+
+  readFile(path: string): Promise<string> {
+    let workspacePath: string;
+    try {
+      workspacePath = this.workspaceFilePath(path, "read");
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return this.enqueue(() =>
+      this.context.runExecution("bash-tool file read", () => this.identity.fs.readFile(workspacePath)),
+    );
+  }
+
+  writeFiles(
+    files: WorkspaceFileInput[],
+    options?: WorkspaceFileWriteOptions,
+  ): Promise<void> {
+    let sampledFiles: WorkspaceFileInput[];
+    try {
+      sampledFiles = files.map((file) => ({
+        path: this.workspaceFilePath(file.path, "write"),
+        content: typeof file.content === "string" ? file.content : new Uint8Array(file.content),
+      }));
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const message = options?.message;
+    return this.enqueue(() =>
+      this.context.runExecution(message, async () => {
+        try {
+          for (const file of sampledFiles) {
+            const parent = parentPath(file.path);
+            if (parent !== this.identity.mountPoint) {
+              await this.identity.fs.mkdir(parent, { recursive: true });
+            }
+            await this.identity.fs.writeFile(file.path, file.content);
+          }
+          const settled = await this.identity.workspace.settleHeldWrites({
+            flushExistingTruncates: true,
+          });
+          if (settled.failures.length > 0) {
+            throw new AggregateError(
+              settled.failures.map(({ error }) => error),
+              "one or more workspace file uploads failed",
+            );
+          }
+        } catch (error) {
+          this.identity.workspace.discardHeldWrites();
+          throw error;
+        }
+      }),
+    );
   }
 
   /** Telemetry must never turn a completed execution into a rejection. */
@@ -357,6 +426,99 @@ class WorkspaceShell implements LoonFsWorkspaceShell {
     this.closed = true;
     await this.queue;
   }
+
+  /** Sampled at enqueue: an operation accepted before close() still runs. */
+  private enqueue<T>(run: () => Promise<T>): Promise<T> {
+    if (this.closed) {
+      return Promise.reject(new Error("this workspace shell is closed"));
+    }
+    const queued = this.queue.then(run);
+    this.queue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+
+  private workspaceFilePath(path: string, syscall: string): string {
+    const normalized = path.startsWith("/")
+      ? normalizeVirtualPath(path, syscall)
+      : joinVirtualPaths(this.identity.mountPoint, path);
+    if (
+      normalized !== this.identity.mountPoint &&
+      !normalized.startsWith(`${this.identity.mountPoint}/`)
+    ) {
+      throw fsError(
+        "EACCES",
+        `file helpers are confined to ${this.identity.mountPoint}`,
+        syscall,
+        path,
+      );
+    }
+    return normalized;
+  }
+}
+
+const EXEC_OPTION_KEYS = new Set([
+  "args",
+  "cwd",
+  "env",
+  "message",
+  "rawScript",
+  "replaceEnv",
+  "signal",
+  "stdin",
+  "stdinKind",
+  "toolCallId",
+]);
+
+function sampleExecOptions(options?: WorkspaceExecOptions): WorkspaceExecOptions | undefined {
+  if (options === undefined) {
+    return undefined;
+  }
+  if (options === null || typeof options !== "object" || Array.isArray(options)) {
+    throw new TypeError("workspace exec options must be an object");
+  }
+  const unknown = Object.keys(options).filter((key) => !EXEC_OPTION_KEYS.has(key));
+  if (unknown.length > 0) {
+    throw new TypeError(`unknown workspace exec option${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}`);
+  }
+  return {
+    ...(options.args !== undefined ? { args: [...options.args] } : {}),
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    ...(options.env !== undefined ? { env: { ...options.env } } : {}),
+    ...(options.message !== undefined ? { message: options.message } : {}),
+    ...(options.rawScript !== undefined ? { rawScript: options.rawScript } : {}),
+    ...(options.replaceEnv !== undefined ? { replaceEnv: options.replaceEnv } : {}),
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
+    ...(options.stdinKind !== undefined ? { stdinKind: options.stdinKind } : {}),
+    ...(options.toolCallId !== undefined ? { toolCallId: options.toolCallId } : {}),
+  };
+}
+
+function toBashExecOptions(options?: WorkspaceExecOptions): BashExecOptions | undefined {
+  if (options === undefined) {
+    return undefined;
+  }
+  return {
+    ...(options.args !== undefined ? { args: options.args } : {}),
+    ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
+    ...(options.env !== undefined ? { env: options.env } : {}),
+    ...(options.rawScript !== undefined ? { rawScript: options.rawScript } : {}),
+    ...(options.replaceEnv !== undefined ? { replaceEnv: options.replaceEnv } : {}),
+    ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    ...(options.stdin !== undefined ? { stdin: options.stdin } : {}),
+    ...(options.stdinKind !== undefined ? { stdinKind: options.stdinKind } : {}),
+  };
+}
+
+function parentPath(path: string): string {
+  return path.slice(0, path.lastIndexOf("/")) || "/";
+}
+
+function isAtOrBelow(path: string, root: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
 }
 
 function resolveBackend(options: CreateWorkspaceShellOptions): LoonFsBackend {
