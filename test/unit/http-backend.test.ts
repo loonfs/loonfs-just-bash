@@ -11,9 +11,10 @@ const commit: MutationCommit = {
 
 function backendWith(overrides: Record<string, unknown>): HttpLoonFsBackend {
   const client = {
-    filesystem: {},
+    capabilities: {},
+    commits: {},
+    files: {},
     namespaces: {},
-    query: {},
     ...overrides,
   } as unknown as LoonFSClient;
   return new HttpLoonFsBackend({ client, namespaceId: "ns_test" });
@@ -23,24 +24,11 @@ function backendForPut(
   createCommit: (request: { operations: Array<Record<string, unknown>> }) => Promise<unknown>,
 ): HttpLoonFsBackend {
   return backendWith({
-    system: {
-      getCapabilities: async () => ({ features: {}, limits: {} }),
+    files: {
+      upload: async (request: Record<string, unknown>) =>
+        createCommit({ operations: [{ kind: "put_file", ...request }] }),
     },
-    uploads: {
-      createUpload: async () => ({ mode: "service_proxied", upload_id: "up_1" }),
-      putUploadContent: async () => undefined,
-      completeUpload: async () => ({
-        status: "completed",
-        upload_id: "up_1",
-        content_ref: {
-          size_bytes: 1,
-          checksum: { algorithm: "sha256", value: "00" },
-        },
-        content_token: "token_1",
-      }),
-      abortUpload: async () => undefined,
-    },
-    filesystem: { createCommit },
+    commits: { create: createCommit },
   });
 }
 
@@ -59,8 +47,8 @@ async function condition(run: Promise<unknown>): Promise<string> {
 describe("HttpLoonFsBackend", () => {
   it("requires capability flags to be explicitly true", async () => {
     const backend = backendWith({
-      system: {
-        getCapabilities: async () => ({
+      capabilities: {
+        retrieve: async () => ({
           profiles: [],
           protocol_version: "v0",
           features: {
@@ -142,8 +130,8 @@ describe("HttpLoonFsBackend", () => {
     expect(writeError.requestId).toBe("req_guard");
 
     const destinationBackend = backendWith({
-      filesystem: {
-        createCommit: async () => {
+      commits: {
+        create: async () => {
           throw pathConflict();
         },
       },
@@ -164,8 +152,8 @@ describe("HttpLoonFsBackend", () => {
     const seen: string[] = [];
     let failed = false;
     const backend = backendWith({
-      filesystem: {
-        createCommit: async (request: { commit_id: string }) => {
+      commits: {
+        create: async (request: { commit_id: string }) => {
           seen.push(request.commit_id);
           if (!failed) {
             failed = true;
@@ -183,8 +171,8 @@ describe("HttpLoonFsBackend", () => {
   it("does not retry a guard conflict", async () => {
     let calls = 0;
     const backend = backendWith({
-      filesystem: {
-        createCommit: async () => {
+      commits: {
+        create: async () => {
           calls += 1;
           throw new LoonFSError({
             message: "conflict",
@@ -212,8 +200,8 @@ describe("HttpLoonFsBackend", () => {
     ];
     for (const [statusCode, code, expected] of cases) {
       const backend = backendWith({
-        filesystem: {
-          getPathEntry: async () => {
+        files: {
+          retrieve: async () => {
             throw new LoonFSError({ message: code, statusCode, body: { code, message: code, request_id: "req_9" } });
           },
         },
@@ -227,8 +215,8 @@ describe("HttpLoonFsBackend", () => {
 
   it("maps foreign 404 responses to unsupported", async () => {
     const missingRoute = backendWith({
-      filesystem: {
-        getPathEntry: async () => {
+      files: {
+        retrieve: async () => {
           throw new LoonFSError({ message: "not found", statusCode: 404, body: {} });
         },
       },
@@ -238,8 +226,8 @@ describe("HttpLoonFsBackend", () => {
     expect(missingError.message).toContain("older than this SDK");
 
     const unknownCode = backendWith({
-      filesystem: {
-        getPathEntry: async () => {
+      files: {
+        retrieve: async () => {
           throw new LoonFSError({
             message: "route not found",
             statusCode: 404,
@@ -253,13 +241,13 @@ describe("HttpLoonFsBackend", () => {
 
   it("maps unknown statuses and transport loss without leaking internals", async () => {
     const backend = backendWith({
-      filesystem: {
-        getPathEntry: async () => {
+      files: {
+        retrieve: async () => {
           throw new LoonFSError({ message: "bad gateway", statusCode: 502, body: {} });
         },
       },
       namespaces: {
-        getNamespace: async () => {
+        retrieve: async () => {
           throw new TypeError("fetch failed: ECONNREFUSED 127.0.0.1:1");
         },
       },
@@ -273,7 +261,7 @@ describe("HttpLoonFsBackend", () => {
   it("treats SDK transport errors as retryable but helper failures as internal", async () => {
     const transport = backendWith({
       namespaces: {
-        getNamespace: async () => {
+        retrieve: async () => {
           throw new LoonFSError({ message: "fetch failed" });
         },
       },
@@ -282,7 +270,7 @@ describe("HttpLoonFsBackend", () => {
 
     const helperFailure = backendWith({
       namespaces: {
-        getNamespace: async () => {
+        retrieve: async () => {
           throw new Error("checksum mismatch with secret details");
         },
       },
@@ -294,7 +282,7 @@ describe("HttpLoonFsBackend", () => {
 
     const typedHelperFailure = backendWith({
       namespaces: {
-        getNamespace: async () => {
+        retrieve: async () => {
           throw new TypeError("boom");
         },
       },

@@ -1,4 +1,4 @@
-import { LoonFSClient, putFile } from "@loonfs/sdk/server";
+import { LoonFSClient } from "@loonfs/sdk/server";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -81,7 +81,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     serverProcess = spawn(SERVER_BIN, ["--config-toml", configToml], { stdio: "ignore" });
     await waitReady(serverUrl);
     client = new LoonFSClient({ environment: serverUrl, token: TOKEN });
-    await client.namespaces.createNamespace({ namespace_id: NAMESPACE });
+    await client.namespaces.create({ namespace_id: NAMESPACE });
   }, 40_000);
 
   afterAll(async () => {
@@ -144,7 +144,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     const ws = await createLoonFsWorkspaceShell({ backend: intercepted, actor, access: "read-write" });
     await ws.exec("echo 'draft one' > contested.txt");
     interception = async () => {
-      await putFile(client, {
+      await client.files.upload({
         namespace_id: NAMESPACE,
         path: "/contested.txt",
         bytes: new TextEncoder().encode("external edit\n"),

@@ -1,5 +1,5 @@
 import type { LoonFSClient, LoonFS } from "@loonfs/sdk/server";
-import { getFile, LoonFSError, putFile } from "@loonfs/sdk/server";
+import { LoonFSError } from "@loonfs/sdk/server";
 import type {
   GrepPage,
   GrepQuery,
@@ -35,7 +35,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
   }
 
   async getCapabilities(): Promise<LoonFsCapabilities> {
-    const document = await this.mapped(() => this.client.system.getCapabilities());
+    const document = await this.mapped(() => this.client.capabilities.retrieve());
     const features = document.features ?? {};
     return {
       serverGrep: features["query.grep"] === true,
@@ -46,14 +46,14 @@ export class HttpLoonFsBackend implements LoonFsBackend {
 
   async getNamespace(): Promise<LoonFsNamespaceInfo> {
     const namespace = await this.mapped(() =>
-      this.client.namespaces.getNamespace({ namespace_id: this.namespaceId }),
+      this.client.namespaces.retrieve({ namespace_id: this.namespaceId }),
     );
     return { namespaceId: this.namespaceId, headSeq: Number(namespace.head_seq) };
   }
 
   async stat(path: string): Promise<LoonFsEntry> {
     const entry = await this.mapped(() =>
-      this.client.filesystem.getPathEntry({ namespace_id: this.namespaceId, path }),
+      this.client.files.retrieve({ namespace_id: this.namespaceId, path }),
     );
     return mapEntry(entry, path);
   }
@@ -64,7 +64,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
   ): Promise<ListDirectoryPage> {
     const page = await this.mapped(async () =>
       (
-        await this.client.filesystem.listPathEntries({
+        await this.client.files.list({
         namespace_id: this.namespaceId,
         path,
         limit: options.limit,
@@ -85,7 +85,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
   async readFile(path: string): Promise<{ bytes: Uint8Array; entry: LoonFsEntry }> {
     const entry = await this.stat(path);
     const downloaded = await this.mapped(() =>
-      getFile(this.client, { namespace_id: this.namespaceId, path }),
+      this.client.files.download({ namespace_id: this.namespaceId, path }),
     );
     return { bytes: downloaded.bytes, entry };
   }
@@ -103,7 +103,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     try {
       const response = await withIdentityGuard(options.expectedInodeId, () =>
         this.retried(() =>
-          putFile(this.client, {
+          this.client.files.upload({
             namespace_id: this.namespaceId,
             path,
             bytes,
@@ -211,7 +211,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
   async grepNamespace(query: GrepQuery): Promise<GrepPage> {
     const response = await this.mapped(async () =>
       (
-        await this.client.query.grep({
+        await this.client.files.grep({
         namespace_id: this.namespaceId,
         pattern: query.pattern,
         case_insensitive: query.caseInsensitive,
@@ -241,7 +241,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     operation: LoonFS.FilesystemOperation,
   ): Promise<MutationReceipt> {
     const response = await this.retried(() =>
-      this.client.filesystem.createCommit({
+      this.client.commits.create({
         namespace_id: this.namespaceId,
         actor: commit.actor,
         commit_id: commit.commitId,
