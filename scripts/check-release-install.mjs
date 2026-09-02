@@ -26,7 +26,9 @@ try {
   const packed = JSON.parse(
     runNpm(["pack", "--json", "--pack-destination", temporaryDirectory], repository),
   );
-  const filename = packed[0]?.filename;
+  // npm 10 reports an array of packed packages; npm 12 reports an object keyed by name.
+  const [first] = Array.isArray(packed) ? packed : Object.values(packed);
+  const filename = first?.filename;
   if (typeof filename !== "string") {
     throw new Error("npm pack did not report a tarball filename");
   }
