@@ -31,7 +31,7 @@ import { LoonFSClient } from "@loonfs/sdk/server";
 import { createLoonFsWorkspaceShell } from "@loonfs/just-bash";
 
 const client = new LoonFSClient({
-  environment: process.env.LOONFS_URL!,
+  baseUrl: process.env.LOONFS_URL!,
   token: process.env.LOONFS_TOKEN!,
 });
 

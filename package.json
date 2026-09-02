@@ -40,10 +40,10 @@
     "just-bash": "3.4.2"
   },
   "peerDependencies": {
-    "@loonfs/sdk": "^0.1.3"
+    "@loonfs/sdk": "^0.2.0"
   },
   "devDependencies": {
-    "@loonfs/sdk": "git+https://github.com/loonfs/loonfs-sdk-typescript.git#8a925ba3ca87a81ad9e7077b16e79b8d850a6103",
+    "@loonfs/sdk": "git+https://github.com/loonfs/loonfs-sdk-typescript.git#80213beb381e4d6766c8023f8d20acf89e942e9c",
     "@types/node": "^26.4.0",
     "ai": "6.0.272",
     "bash-tool": "1.3.19",
