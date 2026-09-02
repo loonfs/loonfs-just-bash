@@ -80,7 +80,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     ].join("\n");
     serverProcess = spawn(SERVER_BIN, ["--config-toml", configToml], { stdio: "ignore" });
     await waitReady(serverUrl);
-    client = new LoonFSClient({ environment: serverUrl, token: TOKEN });
+    client = new LoonFSClient({ baseUrl: serverUrl, token: TOKEN });
     await client.namespaces.create({ namespace_id: NAMESPACE });
   }, 40_000);
 
@@ -147,7 +147,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
       await client.files.upload({
         namespace_id: NAMESPACE,
         path: "/contested.txt",
-        bytes: new TextEncoder().encode("external edit\n"),
+        content: new TextEncoder().encode("external edit\n"),
         actor: { kind: "user", id: "other-writer" },
         commit_id: crypto.randomUUID(),
         behavior: "replace",
@@ -336,7 +336,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     const refused = await ws.exec("echo blocked > blocked.txt");
     expect(refused.exitCode).toBe(1);
     expect(refused.stderr).toContain("EROFS");
-    const error = await new HttpLoonFsBackend({ client: new LoonFSClient({ environment: serverUrl, token: "wrong-token" }), namespaceId: NAMESPACE })
+    const error = await new HttpLoonFsBackend({ client: new LoonFSClient({ baseUrl: serverUrl, token: "wrong-token" }), namespaceId: NAMESPACE })
       .stat("/")
       .catch((e: LoonFsBackendError) => e);
     expect((error as LoonFsBackendError).code).toBe("unauthenticated");

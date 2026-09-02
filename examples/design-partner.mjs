@@ -7,7 +7,7 @@ import { LoonFSClient } from "@loonfs/sdk/server";
 import { createLoonFsWorkspaceShell } from "../dist/index.js";
 
 const client = new LoonFSClient({
-  environment: process.env.LOONFS_URL ?? "http://127.0.0.1:9400",
+  baseUrl: process.env.LOONFS_URL ?? "http://127.0.0.1:9400",
   token: process.env.LOONFS_TOKEN ?? "poc-token",
 });
 const namespaceId = process.env.NAMESPACE ?? "ns_just_bash_demo";

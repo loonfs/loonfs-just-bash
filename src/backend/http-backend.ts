@@ -87,7 +87,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     const downloaded = await this.mapped(() =>
       this.client.files.download({ namespace_id: this.namespaceId, path }),
     );
-    return { bytes: downloaded.bytes, entry };
+    return { bytes: downloaded.content, entry };
   }
 
   async writeFile(
@@ -106,7 +106,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
           this.client.files.upload({
             namespace_id: this.namespaceId,
             path,
-            bytes,
+            content: bytes,
             actor: options.commit.actor,
             commit_id: options.commit.commitId,
             message: options.commit.message ?? null,
