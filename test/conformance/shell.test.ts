@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FakeLoonFsBackend, createLoonFsWorkspaceShell } from "../../src/index.js";
 import type { LoonFsWorkspaceShell } from "../../src/index.js";
 
-const actor = { kind: "service", id: "agent_42" } as const;
+const actorId = "agent_42";
 
 function seededBackend(): FakeLoonFsBackend {
   const backend = new FakeLoonFsBackend({ namespaceId: "ns_customer_123" });
@@ -15,12 +15,13 @@ async function shell(
   backend: FakeLoonFsBackend,
   access: "read-only" | "read-write" = "read-write",
 ): Promise<LoonFsWorkspaceShell> {
-  return createLoonFsWorkspaceShell({ backend, actor, access });
+  return createLoonFsWorkspaceShell({ backend, actorId, access });
 }
 
 describe("LoonFsWorkspaceShell", () => {
   it("executes with observability fields and per-exec budgets", async () => {
     const backend = seededBackend();
+    const writeFile = vi.spyOn(backend, "writeFile");
     const ws = await shell(backend);
     const write = await ws.exec('echo done > result.txt && cat result.txt', {
       toolCallId: "call_1",
@@ -32,6 +33,13 @@ describe("LoonFsWorkspaceShell", () => {
     expect(write.requests).toBeGreaterThan(0);
     expect(write.mutations).toBe(1);
     expect(write.bytesWritten).toBe(5);
+    expect(writeFile).toHaveBeenCalledWith(
+      "/result.txt",
+      expect.any(Uint8Array),
+      expect.objectContaining({
+        commit: expect.objectContaining({ actorId: "agent_42", message: "record completion" }),
+      }),
+    );
     const read = await ws.exec("cat contracts/acme.txt");
     expect(read.mutations).toBe(0);
     expect(read.bytesRead).toBeGreaterThan(0);
@@ -160,7 +168,7 @@ describe("LoonFsWorkspaceShell", () => {
     backend.seedFile("/read-b.txt", "abcdef");
     const ws = await createLoonFsWorkspaceShell({
       backend,
-      actor,
+      actorId,
       access: "read-write",
       limits: { maxReadBytes: 10, maxWriteBytes: 10 },
     });
@@ -228,7 +236,7 @@ describe("LoonFsWorkspaceShell", () => {
     const backend = seededBackend();
     const ws = await createLoonFsWorkspaceShell({
       backend,
-      actor,
+      actorId,
       access: "read-write",
       limits: { maxDirectoryEntries: 1 },
     });
@@ -245,7 +253,7 @@ describe("LoonFsWorkspaceShell", () => {
     const backend = seededBackend();
     const ws = await createLoonFsWorkspaceShell({
       backend,
-      actor,
+      actorId,
       limits: { maxTraversalEntries: 1 },
     });
     const overflow = await ws.exec("find . -type f");
@@ -257,7 +265,7 @@ describe("LoonFsWorkspaceShell", () => {
     const backend = seededBackend();
     const ws = await createLoonFsWorkspaceShell({
       backend,
-      actor,
+      actorId,
       limits: { maxOutputBytes: 8 },
     });
     const overflow = await ws.exec("printf 123456789");
@@ -290,7 +298,7 @@ describe("LoonFsWorkspaceShell", () => {
     await expect(
       createLoonFsWorkspaceShell({
         backend: seededBackend(),
-        actor,
+        actorId,
         mountPoint: "/",
       }),
     ).rejects.toThrow(/mountPoint must name a directory below/);
@@ -301,7 +309,7 @@ describe("LoonFsWorkspaceShell", () => {
       await expect(
         createLoonFsWorkspaceShell({
           backend: seededBackend(),
-          actor,
+          actorId,
           mountPoint,
         }),
       ).rejects.toThrow(/cannot overlap the reserved \/tmp or \/dev trees/);

@@ -107,7 +107,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
             namespace_id: this.namespaceId,
             path,
             content: bytes,
-            actor: options.commit.actor,
+            actor_id: options.commit.actorId,
             commit_id: options.commit.commitId,
             message: options.commit.message ?? null,
             behavior: options.behavior === "replace" ? "replace" : "no_replace",
@@ -243,7 +243,7 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     const response = await this.retried(() =>
       this.client.commits.create({
         namespace_id: this.namespaceId,
-        actor: commit.actor,
+        actor_id: commit.actorId,
         commit_id: commit.commitId,
         ...(commit.message !== undefined ? { message: commit.message } : {}),
         operations: [operation],

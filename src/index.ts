@@ -1,6 +1,5 @@
 export type {
   CreateWorkspaceShellOptions,
-  LoonFsActor,
   LoonFsWorkspaceShell,
   WorkspaceAccess,
   WorkspaceExecOptions,

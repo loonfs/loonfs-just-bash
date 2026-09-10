@@ -1,5 +1,3 @@
-import type { LoonFsActor } from "../types.js";
-
 export type LoonFsEntryKind = "file" | "directory";
 
 export interface LoonFsFileFacts {
@@ -30,7 +28,7 @@ export interface LoonFsNamespaceInfo {
 
 export interface MutationCommit {
   commitId: string;
-  actor: LoonFsActor;
+  actorId: string;
   message?: string;
 }
 

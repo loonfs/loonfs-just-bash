@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
-import type { LoonFsActor, SearchMode } from "../types.js";
+import type { SearchMode } from "../types.js";
 import type { LoonFsEntry, MutationCommit } from "../backend/backend.js";
 import { DEFAULT_WORKSPACE_LIMITS } from "../limits.js";
 import { fsError } from "./errors.js";
@@ -13,7 +13,7 @@ export interface WorkspaceCounters {
 }
 
 export interface MutationContextOptions {
-  actor: LoonFsActor;
+  actorId: string;
   message?: string;
   maxMutationsPerExec?: number;
   maxLoonFsRequestsPerExec?: number;
@@ -42,7 +42,7 @@ interface ExecutionState {
  * letting work continue unbounded.
  */
 export class MutationContext {
-  readonly actor: LoonFsActor;
+  readonly actorId: string;
   readonly message: string;
   private readonly maxMutations: number;
   private readonly maxRequests: number;
@@ -53,7 +53,7 @@ export class MutationContext {
   private lastState = this.fallbackState;
 
   constructor(options: MutationContextOptions) {
-    this.actor = options.actor;
+    this.actorId = options.actorId;
     this.message = options.message ?? "just-bash workspace mutation";
     this.maxMutations = options.maxMutationsPerExec ?? DEFAULT_WORKSPACE_LIMITS.maxMutationsPerExec;
     this.maxRequests =
@@ -78,7 +78,7 @@ export class MutationContext {
     }
     return {
       commitId: `c_${randomUUID().replaceAll("-", "")}`,
-      actor: this.actor,
+      actorId: this.actorId,
       message: state.message ?? this.message,
     };
   }

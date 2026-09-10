@@ -8,7 +8,7 @@ import {
 } from "../../src/index.js";
 import type { LoonFsBackend, WorkspaceExecutionSummary } from "../../src/index.js";
 
-const actor = { kind: "service", id: "agent_42" } as const;
+const actorId = "agent_42";
 
 describe("execution result hardening", () => {
   it("completes an execution even when head telemetry fails", async () => {
@@ -31,7 +31,7 @@ describe("execution result hardening", () => {
         };
       },
     }) as unknown as LoonFsBackend;
-    const ws = await createLoonFsWorkspaceShell({ backend: flaky, actor, access: "read-write" });
+    const ws = await createLoonFsWorkspaceShell({ backend: flaky, actorId, access: "read-write" });
     const result = await ws.exec("echo committed > kept.txt && cat kept.txt");
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("committed\n");
@@ -60,7 +60,7 @@ describe("execution result hardening", () => {
         };
       },
     }) as unknown as LoonFsBackend;
-    const ws = await createLoonFsWorkspaceShell({ backend: slow, actor, access: "read-write" });
+    const ws = await createLoonFsWorkspaceShell({ backend: slow, actorId, access: "read-write" });
     const running = ws.exec("echo slow > slow.txt");
     const closing = ws.close();
     let closed = false;
@@ -111,7 +111,7 @@ describe("execution result hardening", () => {
         };
       },
     }) as unknown as LoonFsBackend;
-    const context = new MutationContext({ actor });
+    const context = new MutationContext({ actorId });
     const fs = new LoonFsFileSystem({
       backend: racing,
       access: "read-write",
@@ -129,7 +129,7 @@ describe("execution result hardening", () => {
     const summaries: WorkspaceExecutionSummary[] = [];
     const ws = await createLoonFsWorkspaceShell({
       backend,
-      actor,
+      actorId,
       access: "read-write",
       onExecutionSummary: (summary) => summaries.push(summary),
     });
@@ -155,7 +155,7 @@ describe("execution result hardening", () => {
     try {
       const ws = await createLoonFsWorkspaceShell({
         backend,
-        actor,
+        actorId,
         onExecutionSummary: async () => {
           throw new Error("observer rejected");
         },
@@ -204,7 +204,7 @@ describe("execution result hardening", () => {
     }) as unknown as LoonFsBackend;
     const ws = await createLoonFsWorkspaceShell({
       backend: delayed,
-      actor,
+      actorId,
       limits: { maxExecutionTimeMs: 25 },
     });
     const timedOut = await ws.exec("cat one.txt");
@@ -223,7 +223,7 @@ describe("execution result hardening", () => {
     const backend = new FakeLoonFsBackend();
     const ws = await createLoonFsWorkspaceShell({
       backend,
-      actor,
+      actorId,
       onExecutionSummary: (summary) => {
         summary.searchModes.push("rejected");
       },
@@ -252,7 +252,7 @@ describe("execution result hardening", () => {
         };
       },
     }) as unknown as LoonFsBackend;
-    const ws = await createLoonFsWorkspaceShell({ backend: fencing, actor, access: "read-write" });
+    const ws = await createLoonFsWorkspaceShell({ backend: fencing, actorId, access: "read-write" });
     const fenced = await ws.exec("echo x > fenced.txt");
     expect(fenced.exitCode).not.toBe(0);
     const writesAfterFence = backendWrites;
@@ -298,7 +298,7 @@ describe("execution result hardening", () => {
     }) as unknown as LoonFsBackend;
     const ws = await createLoonFsWorkspaceShell({
       backend: unreliable,
-      actor,
+      actorId,
       access: "read-write",
     });
     expect((await ws.exec("echo x > fenced.txt")).exitCode).not.toBe(0);

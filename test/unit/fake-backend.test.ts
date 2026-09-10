@@ -3,7 +3,7 @@ import { FakeLoonFsBackend, LoonFsBackendError } from "../../src/index.js";
 import type { MutationCommit } from "../../src/index.js";
 
 function commit(n: number): MutationCommit {
-  return { commitId: `c_${n}`, actor: { kind: "service", id: "test" } };
+  return { commitId: `c_${n}`, actorId: "test" };
 }
 
 function seeded(): FakeLoonFsBackend {
@@ -149,13 +149,19 @@ describe("FakeLoonFsBackend", () => {
     expect((await backend.getNamespace()).headSeq).toBe(first.headSeq);
   });
 
-  it("rejects a commit id reused for a different mutation", async () => {
+  it("rejects a commit id reused for a different actor ID or mutation", async () => {
     const backend = seeded();
     const bytes = new TextEncoder().encode("first payload");
     await backend.writeFile("/new.txt", bytes, {
       behavior: "no-replace",
       commit: commit(1),
     });
+    await expect(
+      backend.writeFile("/new.txt", bytes, {
+        behavior: "no-replace",
+        commit: { ...commit(1), actorId: "other-writer" },
+      }),
+    ).rejects.toMatchObject({ code: "internal" });
     const reused = await code(
       backend.writeFile("/other.txt", new TextEncoder().encode("other payload"), {
         behavior: "no-replace",

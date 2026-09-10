@@ -17,7 +17,7 @@ const SERVER_BIN =
   process.env.LOONFS_SERVER_BIN ?? resolve("../loonfs/target/debug/loonfs-server");
 const TOKEN = "just-bash-integration-token";
 const NAMESPACE = "ns_shell_it";
-const actor = { kind: "service", id: "just-bash-it" } as const;
+const actorId = "just-bash-it";
 
 let serverProcess: ChildProcess | undefined;
 let storeRoot: string | undefined;
@@ -60,7 +60,7 @@ async function waitReady(url: string): Promise<void> {
 }
 
 async function shell(access: "read-only" | "read-write" = "read-write"): Promise<LoonFsWorkspaceShell> {
-  return createLoonFsWorkspaceShell({ client, namespaceId: NAMESPACE, actor, access });
+  return createLoonFsWorkspaceShell({ client, namespaceId: NAMESPACE, actorId, access });
 }
 
 describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () => {
@@ -141,14 +141,14 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
         };
       },
     }) as unknown as LoonFsBackend;
-    const ws = await createLoonFsWorkspaceShell({ backend: intercepted, actor, access: "read-write" });
+    const ws = await createLoonFsWorkspaceShell({ backend: intercepted, actorId, access: "read-write" });
     await ws.exec("echo 'draft one' > contested.txt");
     interception = async () => {
       await client.files.upload({
         namespace_id: NAMESPACE,
         path: "/contested.txt",
         content: new TextEncoder().encode("external edit\n"),
-        actor: { kind: "user", id: "other-writer" },
+        actor_id: "other-writer",
         commit_id: crypto.randomUUID(),
         behavior: "replace",
       });
@@ -164,11 +164,11 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     const bytes = (content: string) => new TextEncoder().encode(content);
     await raw.writeFile("/guarded-cat-source.txt", bytes("SOURCE"), {
       behavior: "no-replace",
-      commit: { commitId: crypto.randomUUID(), actor },
+      commit: { commitId: crypto.randomUUID(), actorId },
     });
     await raw.writeFile("/guarded-cat-target.txt", bytes("INITIAL"), {
       behavior: "no-replace",
-      commit: { commitId: crypto.randomUUID(), actor },
+      commit: { commitId: crypto.randomUUID(), actorId },
     });
     let recreatePending = true;
     const redirectBackend = new Proxy(raw, {
@@ -184,11 +184,11 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
             await target.deletePath("/guarded-cat-target.txt", {
               recursive: false,
               expectedInodeId: observed.inodeId,
-              commit: { commitId: crypto.randomUUID(), actor },
+              commit: { commitId: crypto.randomUUID(), actorId },
             });
             await target.writeFile("/guarded-cat-target.txt", bytes("B"), {
               behavior: "no-replace",
-              commit: { commitId: crypto.randomUUID(), actor },
+              commit: { commitId: crypto.randomUUID(), actorId },
             });
           }
           return (value as (...callArgs: unknown[]) => unknown).apply(target, args);
@@ -197,7 +197,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     }) as unknown as LoonFsBackend;
     const redirectShell = await createLoonFsWorkspaceShell({
       backend: redirectBackend,
-      actor,
+      actorId,
       access: "read-write",
     });
     const redirect = await redirectShell.exec(
@@ -211,11 +211,11 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
 
     await raw.writeFile("/guarded-move-source.txt", bytes("SOURCE"), {
       behavior: "no-replace",
-      commit: { commitId: crypto.randomUUID(), actor },
+      commit: { commitId: crypto.randomUUID(), actorId },
     });
     await raw.writeFile("/guarded-move-target.txt", bytes("INITIAL"), {
       behavior: "no-replace",
-      commit: { commitId: crypto.randomUUID(), actor },
+      commit: { commitId: crypto.randomUUID(), actorId },
     });
     let updatePending = true;
     const moveBackend = new Proxy(raw, {
@@ -236,7 +236,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
               behavior: "replace",
               expectedInodeId: observed.inodeId,
               expectedRevisionNo,
-              commit: { commitId: crypto.randomUUID(), actor },
+              commit: { commitId: crypto.randomUUID(), actorId },
             });
           }
           return (value as (...callArgs: unknown[]) => unknown).apply(target, args);
@@ -245,7 +245,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     }) as unknown as LoonFsBackend;
     const moveShell = await createLoonFsWorkspaceShell({
       backend: moveBackend,
-      actor,
+      actorId,
       access: "read-write",
     });
     const move = await moveShell.exec(
@@ -267,7 +267,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     const oversized = await createLoonFsWorkspaceShell({
       client,
       namespaceId: NAMESPACE,
-      actor,
+      actorId,
       access: "read-write",
       limits: { maxWriteBytes: 8 },
     });
@@ -277,7 +277,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     const boundedLoop = await createLoonFsWorkspaceShell({
       client,
       namespaceId: NAMESPACE,
-      actor,
+      actorId,
       access: "read-write",
       limits: { maxLoopIterations: 16 },
     });
@@ -303,7 +303,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
 
   it("replays a committed mutation under its commit identity", async () => {
     const backend = new HttpLoonFsBackend({ client, namespaceId: NAMESPACE });
-    const commit = { commitId: `c_${crypto.randomUUID().replaceAll("-", "")}`, actor };
+    const commit = { commitId: `c_${crypto.randomUUID().replaceAll("-", "")}`, actorId };
     const first = await backend.createDirectory("/replayed", { parents: false, commit });
     const second = await backend.createDirectory("/replayed", { parents: false, commit });
     expect(second.headSeq).toBe(first.headSeq);

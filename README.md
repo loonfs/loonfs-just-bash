@@ -38,7 +38,7 @@ const client = new LoonFSClient({
 const shell = await createLoonFsWorkspaceShell({
   client,
   namespaceId: "ns_customer_123",
-  actor: { kind: "service", id: "agent_42" },
+  actorId: "agent_42",
   access: "read-write",
 });
 
@@ -54,7 +54,7 @@ await shell.close();
 ```
 
 The shell is read-only unless you set `access: "read-write"`. Writes are
-attributed to the configured `actor`, and the optional `message` is stored with
+attributed to the configured `actorId`, and the optional `message` is stored with
 them. If another writer changes the same file first, the command fails with a
 conflict instead of silently replacing their work.
 
@@ -103,7 +103,7 @@ import {
 const shell = await createLoonFsWorkspaceShell({
   client,
   namespaceId: "ns_customer_123",
-  actor: { kind: "service", id: "agent_42" },
+  actorId: "agent_42",
   access: "read-write",
 });
 const { mountPoint } = await shell.info();
@@ -148,11 +148,18 @@ shell to see the effective limits.
 ## Development
 
 ```sh
-npm install
+npm ci
 npm run lint
 npm run typecheck
 npm test
 ```
+
+Until SDK 0.3.0 is published, the development dependency pins the merged
+actor-ID SDK source at commit `7fc05f6adbf51a31eb0f3c68a76f506db076a96e`.
+`npm ci` builds that SDK through its `prepare` script, so CI and local tests
+use the same API without a sibling checkout. The published peer requirement
+remains `@loonfs/sdk@^0.3.0`; once that version is available, replace the
+development pin with `^0.3.0` and regenerate `package-lock.json`.
 
 Before publishing, `npm run release:check` verifies that required peer versions
 exist on npm and installs the packed tarball in a clean temporary consumer.
