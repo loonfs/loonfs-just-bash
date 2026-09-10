@@ -107,7 +107,7 @@ describe("LoonFsFileSystem read side", () => {
     const backend = new FakeLoonFsBackend();
     backend.seedFile("/one.txt", "one");
     const context = new MutationContext({
-      actor: { kind: "service", id: "agent_test" },
+      actorId: "agent_test",
       maxLoonFsRequestsPerExec: 1,
     });
     context.beginExecution();

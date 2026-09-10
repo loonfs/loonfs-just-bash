@@ -5,7 +5,7 @@ import type { MutationCommit } from "../../src/index.js";
 
 const commit: MutationCommit = {
   commitId: "c_fixed",
-  actor: { kind: "service", id: "agent_test" },
+  actorId: "agent_test",
   message: "test",
 };
 
@@ -26,7 +26,7 @@ function backendForPut(
   return backendWith({
     files: {
       upload: async (request: Record<string, unknown>) =>
-        createCommit({ operations: [{ kind: "put_file", ...request }] }),
+        createCommit({ ...request, operations: [{ kind: "put_file", ...request }] }),
     },
     commits: { create: createCommit },
   });
@@ -66,9 +66,11 @@ describe("HttpLoonFsBackend", () => {
     });
   });
 
-  it("threads identity guards into file, move, and copy operations", async () => {
+  it("passes the actor ID and identity guards to file, move, and copy requests", async () => {
     const operations: Array<Record<string, unknown>> = [];
     const createCommit = async (request: { operations: Array<Record<string, unknown>> }) => {
+      expect(request).toMatchObject({ actor_id: "agent_test" });
+      expect(request).not.toHaveProperty("actor");
       operations.push(request.operations[0]!);
       return { committed_seq: 7 };
     };

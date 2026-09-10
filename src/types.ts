@@ -2,11 +2,6 @@ import type { LoonFSClient } from "@loonfs/sdk/server";
 import type { ExecOptions as JustBashExecOptions, FileContent } from "just-bash";
 import type { LoonFsBackend } from "./backend/backend.js";
 
-export interface LoonFsActor {
-  kind: "user" | "service" | "system";
-  id: string;
-}
-
 export type WorkspaceAccess = "read-only" | "read-write";
 
 export interface WorkspaceLimits {
@@ -28,7 +23,7 @@ export interface CreateWorkspaceShellOptions {
   backend?: LoonFsBackend;
   client?: LoonFSClient;
   namespaceId?: string;
-  actor: LoonFsActor;
+  actorId: string;
   access?: WorkspaceAccess;
   namespaceRoot?: string;
   mountPoint?: string;

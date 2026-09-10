@@ -10,7 +10,7 @@ describe("bash-tool sandbox adapter", () => {
     const backend = new FakeLoonFsBackend();
     const shell = await createLoonFsWorkspaceShell({
       backend,
-      actor: { kind: "service", id: "bash-tool-test" },
+      actorId: "bash-tool-test",
       access: "read-write",
     });
     const sandbox = createBashToolSandbox(shell);
@@ -25,7 +25,7 @@ describe("bash-tool sandbox adapter", () => {
 
     const fresh = await createLoonFsWorkspaceShell({
       backend,
-      actor: { kind: "service", id: "fresh-reader" },
+      actorId: "fresh-reader",
     });
     expect((await fresh.exec("cat input/a.txt")).stdout).toBe("alpha");
   });
@@ -34,7 +34,7 @@ describe("bash-tool sandbox adapter", () => {
     const backend = new FakeLoonFsBackend();
     const shell = await createLoonFsWorkspaceShell({
       backend,
-      actor: { kind: "service", id: "bash-tool-integration" },
+      actorId: "bash-tool-integration",
       access: "read-write",
     });
     const toolkit = await createBashTool({

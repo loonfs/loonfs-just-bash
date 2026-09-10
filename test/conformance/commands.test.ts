@@ -7,7 +7,7 @@ let bash: Bash;
 let backend: FakeLoonFsBackend;
 
 function makeBash(access: WorkspaceAccess): Bash {
-  const context = new MutationContext({ actor: { kind: "service", id: "agent_test" } });
+  const context = new MutationContext({ actorId: "agent_test" });
   const workspace = new LoonFsFileSystem({ backend, access, context });
   const fs = new MountableFs({
     base: new InMemoryFs(),

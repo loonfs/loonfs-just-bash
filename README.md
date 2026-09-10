@@ -38,7 +38,7 @@ const client = new LoonFSClient({
 const shell = await createLoonFsWorkspaceShell({
   client,
   namespaceId: "ns_customer_123",
-  actor: { kind: "service", id: "agent_42" },
+  actorId: "agent_42",
   access: "read-write",
 });
 
@@ -54,7 +54,7 @@ await shell.close();
 ```
 
 The shell is read-only unless you set `access: "read-write"`. Writes are
-attributed to the configured `actor`, and the optional `message` is stored with
+attributed to the configured `actorId`, and the optional `message` is stored with
 them. If another writer changes the same file first, the command fails with a
 conflict instead of silently replacing their work.
 
@@ -103,7 +103,7 @@ import {
 const shell = await createLoonFsWorkspaceShell({
   client,
   namespaceId: "ns_customer_123",
-  actor: { kind: "service", id: "agent_42" },
+  actorId: "agent_42",
   access: "read-write",
 });
 const { mountPoint } = await shell.info();

@@ -452,7 +452,7 @@ export class FakeLoonFsBackend implements LoonFsBackend {
     apply: () => LoonFsEntry | undefined,
   ): Promise<MutationReceipt> {
     const signature = JSON.stringify({
-      actor: { kind: commit.actor.kind, id: commit.actor.id },
+      actorId: commit.actorId,
       message: commit.message,
       operation,
     });

@@ -35,12 +35,12 @@ function intercepting(fake: FakeLoonFsBackend): {
 let externalCounter = 0;
 function externalCommit(): MutationCommit {
   externalCounter += 1;
-  return { commitId: `external_${externalCounter}`, actor: { kind: "user", id: "other-writer" } };
+  return { commitId: `external_${externalCounter}`, actorId: "other-writer" };
 }
 
 function workspace(backend: LoonFsBackend, overrides?: { access?: "read-only" | "read-write"; maxMutationsPerExec?: number; maxWriteBytes?: number; maxAppendSourceBytes?: number }) {
   const context = new MutationContext({
-    actor: { kind: "service", id: "agent_test" },
+    actorId: "agent_test",
     ...(overrides?.maxMutationsPerExec !== undefined
       ? { maxMutationsPerExec: overrides.maxMutationsPerExec }
       : {}),

@@ -16,7 +16,7 @@ await client.namespaces.create({ namespace_id: namespaceId }).catch(() => {});
 const shell = await createLoonFsWorkspaceShell({
   client,
   namespaceId,
-  actor: { kind: "service", id: "design-partner-example" },
+  actorId: "design-partner-example",
   access: "read-write",
 });
 

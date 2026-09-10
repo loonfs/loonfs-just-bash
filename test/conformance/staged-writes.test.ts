@@ -11,7 +11,7 @@ import type {
   WorkspaceLimits,
 } from "../../src/index.js";
 
-const actor = { kind: "service", id: "agent_staged" } as const;
+const actorId = "agent_staged";
 
 function shell(
   backend: LoonFsBackend,
@@ -19,7 +19,7 @@ function shell(
 ): Promise<LoonFsWorkspaceShell> {
   return createLoonFsWorkspaceShell({
     backend,
-    actor,
+    actorId,
     access: "read-write",
     ...(limits !== undefined ? { limits } : {}),
   });
@@ -37,7 +37,7 @@ let externalCommitNo = 0;
 
 function externalCommit(): MutationCommit {
   externalCommitNo += 1;
-  return { commitId: `c_external_${externalCommitNo}`, actor };
+  return { commitId: `c_external_${externalCommitNo}`, actorId };
 }
 
 function interceptFirst(
@@ -161,7 +161,7 @@ describe("staged workspace writes", () => {
               behavior: "replace",
               expectedInodeId: observed.inodeId,
               expectedRevisionNo,
-              commit: { commitId: "c_external1", actor },
+              commit: { commitId: "c_external1", actorId },
             });
           }
           return (value as LoonFsBackend["readFile"]).call(target, path);

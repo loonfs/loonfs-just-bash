@@ -6,7 +6,7 @@ import {
 } from "../../src/index.js";
 import type { LoonFsBackend, LoonFsWorkspaceShell } from "../../src/index.js";
 
-const actor = { kind: "service", id: "agent_42" } as const;
+const actorId = "agent_42";
 
 function seeded(): FakeLoonFsBackend {
   const backend = new FakeLoonFsBackend({ namespaceId: "ns_search" });
@@ -37,7 +37,7 @@ function counted(backend: FakeLoonFsBackend): { proxy: FakeLoonFsBackend; calls:
 }
 
 async function shell(backend: FakeLoonFsBackend): Promise<LoonFsWorkspaceShell> {
-  return createLoonFsWorkspaceShell({ backend, actor, access: "read-write" });
+  return createLoonFsWorkspaceShell({ backend, actorId, access: "read-write" });
 }
 
 describe("server-indexed recursive search", () => {
@@ -159,7 +159,7 @@ describe("server-indexed recursive search", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) as unknown as LoonFsBackend;
-    const ws = await createLoonFsWorkspaceShell({ backend: refusing, actor });
+    const ws = await createLoonFsWorkspaceShell({ backend: refusing, actorId });
     const result = await ws.exec("loonfs-grep termination contracts");
     expect(result.exitCode).not.toBe(0);
     expect(result.stderr).toContain("ENOTSUP");

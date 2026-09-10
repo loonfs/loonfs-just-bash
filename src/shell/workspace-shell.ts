@@ -59,7 +59,7 @@ export async function createLoonFsWorkspaceShell(
     throw error;
   }
   const context = new MutationContext({
-    actor: options.actor,
+    actorId: options.actorId,
     maxMutationsPerExec: limits.maxMutationsPerExec,
     maxLoonFsRequestsPerExec: limits.maxLoonFsRequestsPerExec,
     maxReadBytesPerExec: limits.maxReadBytes,
