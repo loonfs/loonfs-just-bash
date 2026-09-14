@@ -81,8 +81,8 @@ export class SessionBackend implements LoonFsBackend {
   }
 
   async movePath(
-    fromPath: string,
-    toPath: string,
+    sourcePath: string,
+    destinationPath: string,
     options: {
       behavior: WriteBehavior;
       expectedDestinationInodeId?: string;
@@ -90,12 +90,12 @@ export class SessionBackend implements LoonFsBackend {
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {
-    return this.mutating(() => this.inner.movePath(fromPath, toPath, options));
+    return this.mutating(() => this.inner.movePath(sourcePath, destinationPath, options));
   }
 
   async copyFile(
-    fromPath: string,
-    toPath: string,
+    sourcePath: string,
+    destinationPath: string,
     options: {
       behavior: WriteBehavior;
       expectedDestinationInodeId?: string;
@@ -103,7 +103,7 @@ export class SessionBackend implements LoonFsBackend {
       commit: MutationCommit;
     },
   ): Promise<MutationReceipt> {
-    return this.mutating(() => this.inner.copyFile(fromPath, toPath, options));
+    return this.mutating(() => this.inner.copyFile(sourcePath, destinationPath, options));
   }
 
   async grepNamespace(query: GrepQuery): Promise<GrepPage> {
