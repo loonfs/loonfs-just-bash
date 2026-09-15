@@ -130,8 +130,8 @@ export interface LoonFsBackend {
     options: { recursive: boolean; expectedInodeId?: string; commit: MutationCommit },
   ): Promise<MutationReceipt>;
   movePath(
-    fromPath: string,
-    toPath: string,
+    sourcePath: string,
+    destinationPath: string,
     options: {
       behavior: WriteBehavior;
       expectedDestinationInodeId?: string;
@@ -140,8 +140,8 @@ export interface LoonFsBackend {
     },
   ): Promise<MutationReceipt>;
   copyFile(
-    fromPath: string,
-    toPath: string,
+    sourcePath: string,
+    destinationPath: string,
     options: {
       behavior: WriteBehavior;
       expectedDestinationInodeId?: string;

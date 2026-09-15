@@ -349,8 +349,8 @@ export class FakeLoonFsBackend implements LoonFsBackend {
   }
 
   async movePath(
-    fromPath: string,
-    toPath: string,
+    sourcePath: string,
+    destinationPath: string,
     options: {
       behavior: WriteBehavior;
       expectedDestinationInodeId?: string;
@@ -366,23 +366,23 @@ export class FakeLoonFsBackend implements LoonFsBackend {
       options.commit,
       {
         kind: "move_path",
-        fromPath,
-        toPath,
+        sourcePath,
+        destinationPath,
         behavior: options.behavior,
         expectedDestinationInodeId: options.expectedDestinationInodeId,
         expectedDestinationRevisionNo: options.expectedDestinationRevisionNo,
       },
       () => {
-        const from = this.parentOf(fromPath);
+        const from = this.parentOf(sourcePath);
         const node = from.directory.children.get(from.name);
         if (node === undefined) {
-          throw new LoonFsBackendError("not_found", `${fromPath} does not exist`);
+          throw new LoonFsBackendError("not_found", `${sourcePath} does not exist`);
         }
-        if (node.kind === "directory" && this.isWithin(toPath, fromPath)) {
-          throw new LoonFsBackendError("invalid_path", `${toPath} is inside ${fromPath}`);
+        if (node.kind === "directory" && this.isWithin(destinationPath, sourcePath)) {
+          throw new LoonFsBackendError("invalid_path", `${destinationPath} is inside ${sourcePath}`);
         }
-        const to = this.parentOf(toPath);
-        this.claimDestination(to.directory, to.name, toPath, {
+        const to = this.parentOf(destinationPath);
+        this.claimDestination(to.directory, to.name, destinationPath, {
           behavior: options.behavior,
           expectedInodeId: options.expectedDestinationInodeId,
           expectedRevisionNo: options.expectedDestinationRevisionNo,
@@ -390,14 +390,14 @@ export class FakeLoonFsBackend implements LoonFsBackend {
         from.directory.children.delete(from.name);
         node.name = to.name;
         to.directory.children.set(to.name, node);
-        return this.entry(toPath, node);
+        return this.entry(destinationPath, node);
       },
     );
   }
 
   async copyFile(
-    fromPath: string,
-    toPath: string,
+    sourcePath: string,
+    destinationPath: string,
     options: {
       behavior: WriteBehavior;
       expectedDestinationInodeId?: string;
@@ -413,19 +413,19 @@ export class FakeLoonFsBackend implements LoonFsBackend {
       options.commit,
       {
         kind: "copy_file",
-        fromPath,
-        toPath,
+        sourcePath,
+        destinationPath,
         behavior: options.behavior,
         expectedDestinationInodeId: options.expectedDestinationInodeId,
         expectedDestinationRevisionNo: options.expectedDestinationRevisionNo,
       },
       () => {
-        const source = this.resolve(fromPath);
+        const source = this.resolve(sourcePath);
         if (source.kind !== "file") {
-          throw new LoonFsBackendError("is_a_directory", `${fromPath} is a directory`);
+          throw new LoonFsBackendError("is_a_directory", `${sourcePath} is a directory`);
         }
-        const to = this.parentOf(toPath);
-        const displaced = this.claimDestination(to.directory, to.name, toPath, {
+        const to = this.parentOf(destinationPath);
+        const displaced = this.claimDestination(to.directory, to.name, destinationPath, {
           behavior: options.behavior,
           expectedInodeId: options.expectedDestinationInodeId,
           expectedRevisionNo: options.expectedDestinationRevisionNo,
@@ -440,7 +440,7 @@ export class FakeLoonFsBackend implements LoonFsBackend {
           bytes: source.bytes.slice(),
         };
         to.directory.children.set(to.name, copied);
-        return this.entry(toPath, copied);
+        return this.entry(destinationPath, copied);
       },
     );
   }

@@ -157,8 +157,8 @@ export class HttpLoonFsBackend implements LoonFsBackend {
   }
 
   async movePath(
-    fromPath: string,
-    toPath: string,
+    sourcePath: string,
+    destinationPath: string,
     options: {
       behavior: WriteBehavior;
       expectedDestinationInodeId?: string;
@@ -169,8 +169,8 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     return withIdentityGuard(options.expectedDestinationInodeId, () =>
       this.commitOne(options.commit, {
         kind: "move_path",
-        from_path: fromPath,
-        to_path: toPath,
+        source_path: sourcePath,
+        destination_path: destinationPath,
         behavior: options.behavior === "replace" ? "replace" : "no_replace",
         ...(options.expectedDestinationInodeId !== undefined
           ? { expected_destination_inode_id: options.expectedDestinationInodeId }
@@ -183,8 +183,8 @@ export class HttpLoonFsBackend implements LoonFsBackend {
   }
 
   async copyFile(
-    fromPath: string,
-    toPath: string,
+    sourcePath: string,
+    destinationPath: string,
     options: {
       behavior: WriteBehavior;
       expectedDestinationInodeId?: string;
@@ -195,8 +195,8 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     return withIdentityGuard(options.expectedDestinationInodeId, () =>
       this.commitOne(options.commit, {
         kind: "copy_path",
-        from_path: fromPath,
-        to_path: toPath,
+        source_path: sourcePath,
+        destination_path: destinationPath,
         behavior: options.behavior === "replace" ? "replace" : "no_replace",
         ...(options.expectedDestinationInodeId !== undefined
           ? { expected_destination_inode_id: options.expectedDestinationInodeId }
