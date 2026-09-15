@@ -21,12 +21,15 @@ function backendWith(overrides: Record<string, unknown>): HttpLoonFsBackend {
 }
 
 function backendForPut(
-  createCommit: (request: { operations: Array<Record<string, unknown>> }) => Promise<unknown>,
+  createCommit: (
+    request: { operations: Array<Record<string, unknown>> },
+    requestOptions?: LoonFSClient.RequestOptions,
+  ) => Promise<unknown>,
 ): HttpLoonFsBackend {
   return backendWith({
     files: {
-      upload: async (request: Record<string, unknown>) =>
-        createCommit({ ...request, operations: [{ kind: "put_file", ...request }] }),
+      upload: async (request: Record<string, unknown>, requestOptions?: LoonFSClient.RequestOptions) =>
+        createCommit({ ...request, operations: [{ kind: "put_file", ...request }] }, requestOptions),
     },
     commits: { create: createCommit },
   });
@@ -66,10 +69,14 @@ describe("HttpLoonFsBackend", () => {
     });
   });
 
-  it("passes the actor ID and identity guards to file, move, and copy requests", async () => {
+  it("passes the actor header and identity guards to file, move, and copy requests", async () => {
     const operations: Array<Record<string, unknown>> = [];
-    const createCommit = async (request: { operations: Array<Record<string, unknown>> }) => {
-      expect(request).toMatchObject({ actor_id: "agent_test" });
+    const createCommit = async (
+      request: { operations: Array<Record<string, unknown>> },
+      requestOptions?: LoonFSClient.RequestOptions,
+    ) => {
+      expect(requestOptions).toEqual({ headers: { "Loonfs-Actor": "agent_test" } });
+      expect(request).not.toHaveProperty("actor_id");
       expect(request).not.toHaveProperty("actor");
       operations.push(request.operations[0]!);
       return { committed_seq: 7 };
@@ -150,24 +157,32 @@ describe("HttpLoonFsBackend", () => {
     }
   });
 
-  it("retries a lost commit outcome once with the same commit identity", async () => {
-    const seen: string[] = [];
+  it.each(["upload", "commit"])("retries a lost %s outcome once with the same commit ID and actor header", async (method) => {
+    const seen: Array<[string, unknown]> = [];
     let failed = false;
+    const createCommit = async (
+      request: { commit_id: string },
+      requestOptions?: LoonFSClient.RequestOptions,
+    ) => {
+      seen.push([request.commit_id, requestOptions?.headers?.["Loonfs-Actor"]]);
+      if (!failed) {
+        failed = true;
+        throw new TypeError("fetch failed");
+      }
+      return { namespace_id: "ns_test", commit_id: request.commit_id, committed_seq: 7 };
+    };
     const backend = backendWith({
-      commits: {
-        create: async (request: { commit_id: string }) => {
-          seen.push(request.commit_id);
-          if (!failed) {
-            failed = true;
-            throw new TypeError("fetch failed");
-          }
-          return { namespace_id: "ns_test", commit_id: request.commit_id, committed_seq: 7 };
-        },
-      },
+      files: { upload: createCommit },
+      commits: { create: createCommit },
     });
-    const receipt = await backend.createDirectory("/made", { parents: false, commit });
+    const receipt = method === "upload"
+      ? await backend.writeFile("/made.txt", new Uint8Array([1]), { behavior: "no-replace", commit })
+      : await backend.createDirectory("/made", { parents: false, commit });
     expect(receipt.headSeq).toBe(7);
-    expect(seen).toEqual(["c_fixed", "c_fixed"]);
+    expect(seen).toEqual([
+      ["c_fixed", "agent_test"],
+      ["c_fixed", "agent_test"],
+    ]);
   });
 
   it("does not retry a guard conflict", async () => {

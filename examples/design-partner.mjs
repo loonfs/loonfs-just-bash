@@ -11,7 +11,10 @@ const client = new LoonFSClient({
   token: process.env.LOONFS_TOKEN ?? "poc-token",
 });
 const namespaceId = process.env.NAMESPACE ?? "ns_just_bash_demo";
-await client.namespaces.create({ namespace_id: namespaceId }).catch(() => {});
+await client.namespaces.create(
+  { namespace_id: namespaceId },
+  { headers: { "Loonfs-Actor": "design-partner-example" } },
+).catch(() => {});
 
 const shell = await createLoonFsWorkspaceShell({
   client,

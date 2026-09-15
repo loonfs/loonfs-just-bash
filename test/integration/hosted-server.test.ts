@@ -81,7 +81,10 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     serverProcess = spawn(SERVER_BIN, ["--config-toml", configToml], { stdio: "ignore" });
     await waitReady(serverUrl);
     client = new LoonFSClient({ baseUrl: serverUrl, token: TOKEN });
-    await client.namespaces.create({ namespace_id: NAMESPACE });
+    await client.namespaces.create(
+      { namespace_id: NAMESPACE },
+      { headers: { "Loonfs-Actor": actorId } },
+    );
   }, 40_000);
 
   afterAll(async () => {
@@ -144,14 +147,16 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
     const ws = await createLoonFsWorkspaceShell({ backend: intercepted, actorId, access: "read-write" });
     await ws.exec("echo 'draft one' > contested.txt");
     interception = async () => {
-      await client.files.upload({
-        namespace_id: NAMESPACE,
-        path: "/contested.txt",
-        content: new TextEncoder().encode("external edit\n"),
-        actor_id: "other-writer",
-        commit_id: crypto.randomUUID(),
-        behavior: "replace",
-      });
+      await client.files.upload(
+        {
+          namespace_id: NAMESPACE,
+          path: "/contested.txt",
+          content: new TextEncoder().encode("external edit\n"),
+          commit_id: crypto.randomUUID(),
+          behavior: "replace",
+        },
+        { headers: { "Loonfs-Actor": "other-writer" } },
+      );
     };
     const conflict = await ws.exec("echo 'agent edit' > contested.txt");
     expect(conflict.exitCode).toBe(1);
