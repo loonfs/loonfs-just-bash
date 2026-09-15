@@ -58,6 +58,10 @@ attributed to the configured `actorId`, and the optional `message` is stored wit
 them. If another writer changes the same file first, the command fails with a
 conflict instead of silently replacing their work.
 
+The shell sends `actorId` in the `Loonfs-Actor` request header for each mutation,
+including retries. This overrides any default actor on the supplied SDK client.
+The server requires an actor ID of 1 to 256 visible ASCII characters.
+
 ## How the workspace behaves
 
 - `/workspace` contains the LoonFS namespace. Changes there are durable.
@@ -155,7 +159,8 @@ npm test
 ```
 
 Until SDK 0.3.0 is published, the development dependency pins the merged
-actor-ID SDK source at commit `7fc05f6adbf51a31eb0f3c68a76f506db076a96e`.
+SDK source at commit `99e989ff3f0a61bc5dcd7d6ac87a91a9bfc6f592`, which sends
+the actor in the `Loonfs-Actor` header instead of request bodies.
 `npm ci` builds that SDK through its `prepare` script, so CI and local tests
 use the same API without a sibling checkout. The published peer requirement
 remains `@loonfs/sdk@^0.3.0`; once that version is available, replace the

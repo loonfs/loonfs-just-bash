@@ -103,21 +103,23 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     try {
       const response = await withIdentityGuard(options.expectedInodeId, () =>
         this.retried(() =>
-          this.client.files.upload({
-            namespace_id: this.namespaceId,
-            path,
-            content: bytes,
-            actor_id: options.commit.actorId,
-            commit_id: options.commit.commitId,
-            message: options.commit.message ?? null,
-            behavior: options.behavior === "replace" ? "replace" : "no_replace",
-            ...(options.expectedInodeId !== undefined
-              ? { expected_inode_id: options.expectedInodeId }
-              : {}),
-            ...(options.expectedRevisionNo !== undefined
-              ? { expected_revision_no: options.expectedRevisionNo }
-              : {}),
-          }),
+          this.client.files.upload(
+            {
+              namespace_id: this.namespaceId,
+              path,
+              content: bytes,
+              commit_id: options.commit.commitId,
+              ...(options.commit.message !== undefined ? { message: options.commit.message } : {}),
+              behavior: options.behavior === "replace" ? "replace" : "no_replace",
+              ...(options.expectedInodeId !== undefined
+                ? { expected_inode_id: options.expectedInodeId }
+                : {}),
+              ...(options.expectedRevisionNo !== undefined
+                ? { expected_revision_no: options.expectedRevisionNo }
+                : {}),
+            },
+            { headers: { "Loonfs-Actor": options.commit.actorId } },
+          ),
         ),
       );
       return { headSeq: Number(response.committed_seq) };
@@ -241,13 +243,15 @@ export class HttpLoonFsBackend implements LoonFsBackend {
     operation: LoonFS.FilesystemOperation,
   ): Promise<MutationReceipt> {
     const response = await this.retried(() =>
-      this.client.commits.create({
-        namespace_id: this.namespaceId,
-        actor_id: commit.actorId,
-        commit_id: commit.commitId,
-        ...(commit.message !== undefined ? { message: commit.message } : {}),
-        operations: [operation],
-      }),
+      this.client.commits.create(
+        {
+          namespace_id: this.namespaceId,
+          commit_id: commit.commitId,
+          ...(commit.message !== undefined ? { message: commit.message } : {}),
+          operations: [operation],
+        },
+        { headers: { "Loonfs-Actor": commit.actorId } },
+      ),
     );
     return { headSeq: Number(response.committed_seq) };
   }
