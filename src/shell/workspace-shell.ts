@@ -53,7 +53,7 @@ export async function createLoonFsWorkspaceShell(
   } catch (error) {
     if (isBackendCondition(error, "unsupported")) {
       throw new Error(
-        "the LoonFS server did not answer a current path read; this package needs a server speaking LoonFS API v0.3.x",
+        "the LoonFS server did not answer a current path read; this package needs a server speaking LoonFS API v0.4.x",
       );
     }
     throw error;

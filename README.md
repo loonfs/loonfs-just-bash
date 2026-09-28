@@ -24,7 +24,7 @@ examples.
 
 Connect the shell to an existing namespace. It mounts that namespace at
 `/workspace`. The shell checks the server during creation and refuses to attach
-when the server does not speak LoonFS API v0.3.x.
+when the server does not speak LoonFS API v0.4.x.
 
 ```ts
 import { LoonFSClient } from "@loonfs/sdk/server";
@@ -57,6 +57,10 @@ The shell is read-only unless you set `access: "read-write"`. Writes are
 attributed to the configured `actorId`, and the optional `message` is stored with
 them. If another writer changes the same file first, the command fails with a
 conflict instead of silently replacing their work.
+
+The shell sends `actorId` in the `Loonfs-Actor` request header for each mutation,
+including retries. This overrides any default actor on the supplied SDK client.
+The server requires an actor ID of 1 to 256 visible ASCII characters.
 
 ## How the workspace behaves
 
@@ -153,13 +157,6 @@ npm run lint
 npm run typecheck
 npm test
 ```
-
-Until SDK 0.3.0 is published, the development dependency pins the merged
-actor-ID SDK source at commit `7fc05f6adbf51a31eb0f3c68a76f506db076a96e`.
-`npm ci` builds that SDK through its `prepare` script, so CI and local tests
-use the same API without a sibling checkout. The published peer requirement
-remains `@loonfs/sdk@^0.3.0`; once that version is available, replace the
-development pin with `^0.3.0` and regenerate `package-lock.json`.
 
 Before publishing, `npm run release:check` verifies that required peer versions
 exist on npm and installs the packed tarball in a clean temporary consumer.
