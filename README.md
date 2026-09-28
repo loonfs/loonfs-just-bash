@@ -24,7 +24,7 @@ examples.
 
 Connect the shell to an existing namespace. It mounts that namespace at
 `/workspace`. The shell checks the server during creation and refuses to attach
-when the server does not speak LoonFS API v0.3.x.
+when the server does not speak LoonFS API v0.4.x.
 
 ```ts
 import { LoonFSClient } from "@loonfs/sdk/server";
@@ -157,14 +157,6 @@ npm run lint
 npm run typecheck
 npm test
 ```
-
-Until SDK 0.3.0 is published, the development dependency pins the merged
-SDK source at commit `99e989ff3f0a61bc5dcd7d6ac87a91a9bfc6f592`, which sends
-the actor in the `Loonfs-Actor` header instead of request bodies.
-`npm ci` builds that SDK through its `prepare` script, so CI and local tests
-use the same API without a sibling checkout. The published peer requirement
-remains `@loonfs/sdk@^0.3.0`; once that version is available, replace the
-development pin with `^0.3.0` and regenerate `package-lock.json`.
 
 Before publishing, `npm run release:check` verifies that required peer versions
 exist on npm and installs the packed tarball in a clean temporary consumer.

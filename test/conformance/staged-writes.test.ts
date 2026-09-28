@@ -493,7 +493,7 @@ describe("staged workspace writes", () => {
         };
       },
     }) as unknown as LoonFsBackend;
-    await expect(shell(outdated)).rejects.toThrow(/v0\.3/);
+    await expect(shell(outdated)).rejects.toThrow(/v0\.4/);
   });
 
   it("a shell function named grep is left alone", async () => {
