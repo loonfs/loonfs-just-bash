@@ -75,7 +75,7 @@ describe.skipIf(!existsSync(SERVER_BIN))("hosted loonfs-server integration", () 
       `writer_id = "just-bash-it-writer"`,
       "",
       "[store]",
-      'kind = "local-fs"',
+      'kind = "local_fs"',
       `root = "${storeRoot}"`,
     ].join("\n");
     serverProcess = spawn(SERVER_BIN, ["--config-toml", configToml], { stdio: "ignore" });
