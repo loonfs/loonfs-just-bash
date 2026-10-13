@@ -327,7 +327,7 @@ const CODE_CONDITIONS: Record<string, LoonFsBackendError["code"]> = {
   namespace_exists: "destination_exists",
   directory_not_empty: "directory_not_empty",
   stale_revision: "stale_revision",
-  binding_generation_mismatch: "raced_binding",
+  binding_version_mismatch: "raced_binding",
   would_cycle: "invalid_path",
   invalid_request: "invalid_path",
   wire_string: "invalid_path",
